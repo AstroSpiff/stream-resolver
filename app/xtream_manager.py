@@ -5,13 +5,12 @@ import re
 import json
 import zlib
 import time
-import html
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Iterable, DefaultDict
+from typing import Any, Dict, List, Optional, Tuple, Iterable
 from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException, Response, Request, Depends
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse, RedirectResponse
 
 # ====== PATHS & ENV ======
