@@ -17,7 +17,7 @@ services:
       # Resolvers esterni (sola lettura)
       - ./resolvers:/opt/external-resolvers:ro
       # (opzionale) Sovrascrivi solo il domains.json usato dai resolvers
-      - ./resolvers/config/domains.json:/app/config/domains.json:ro
+      - ./resolvers/config/domains.json:/opt/external-resolvers/config/domains.json:ro
     environment:
       # Queste variabili non sono obbligatorie perché il tuo main.py ha default sensati,
       # ma le espongo per chiarezza (puoi anche rimuoverle):
@@ -26,7 +26,7 @@ services:
       STATIC_DIR: /app/app/static
       # Per i resolvers Python esterni che le leggono:
       RESOLVERS_DIR: /opt/external-resolvers
-      DOMAINS_JSON: /app/config/domains.json
+      DOMAINS_JSON: /opt/external-resolvers/config/domains.json
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
     restart: unless-stopped
