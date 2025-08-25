@@ -15,7 +15,7 @@ import sys
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, unquote
 import json, os
-with open(os.path.join(os.path.dirname(__file__), '../../config/domains.json'), encoding='utf-8') as f:
+with open(os.path.join(os.path.dirname(__file__), 'config/domains.json'), encoding='utf-8') as f:
     DOMAINS = json.load(f)
 BASE_URL = f"https://www.{DOMAINS['animeunity']}"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"

@@ -16,7 +16,7 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE_DIR = os.path.dirname(__file__)
-with open(os.path.join(BASE_DIR, '../../config/domains.json'), encoding='utf-8') as f:
+with open(os.path.join(BASE_DIR, 'config/domains.json'), encoding='utf-8') as f:
     DOMAINS = json.load(f)
 AW_HOST = DOMAINS.get('animeworld', 'animeworld.so')
 BASE_URL = f"https://{AW_HOST}"

@@ -14,7 +14,7 @@ import json
 import urllib.parse
 import argparse
 import os
-with open(os.path.join(os.path.dirname(__file__), '../../config/domains.json'), encoding='utf-8') as f:
+with open(os.path.join(os.path.dirname(__file__), 'config/domains.json'), encoding='utf-8') as f:
     DOMAINS = json.load(f)
 BASE_URL = f"https://{DOMAINS['animesaturn']}"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
