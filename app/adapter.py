@@ -1,4 +1,3 @@
-import sys
 import json
 import subprocess
 from typing import Optional
