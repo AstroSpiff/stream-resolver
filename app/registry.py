@@ -2,7 +2,7 @@ import os, json
 from pathlib import Path
 
 RESOLVERS_DIR = os.environ.get("RESOLVERS_DIR", "/opt/external-resolvers")
-DOMAINS_JSON  = os.environ.get("DOMAINS_JSON", "/app/config/domains.json")
+DOMAINS_JSON  = os.environ.get("DOMAINS_JSON", "/opt/external-resolvers/config/domains.json")
 
 if os.path.exists(DOMAINS_JSON):
     with open(DOMAINS_JSON, "r", encoding="utf-8") as f:
