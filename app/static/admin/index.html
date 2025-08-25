@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8"/>
+  <title>Stream Resolver – Admin</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/static/admin/style.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Stream Resolver – Admin</h1>
+
+    <section>
+      <h2>Settings</h2>
+      <div class="grid">
+        <label>Mediaflow‑proxy URL
+          <input id="mediaflow_url" placeholder="https://my-mediaflow.example.org"/>
+        </label>
+        <label>Mediaflow api_password
+          <input type="password" id="api_password" placeholder="********"/>
+        </label>
+        <label>URL Stream Resolver (host:porta o DNS)
+          <input id="stream_resolver_url" placeholder="192.168.68.50:8791 oppure myaddr.duckdns.org"/>
+        </label>
+      </div>
+      <button id="btnSave">Salva</button>
+      <span id="saveStatus" class="muted"></span>
+    </section>
+
+    <section>
+      <h2>Converti Playlist (una‑tantum)</h2>
+      <div class="grid">
+        <label>URL playlist originale
+          <input id="conv_url" placeholder="https://.../lista.m3u"/>
+        </label>
+        <label>Tipo contenuto
+          <select id="conv_mode">
+            <option value="video">video</option>
+            <option value="tv">tv</option>
+          </select>
+        </label>
+      </div>
+      <button id="btnConvert">Converti & Scarica</button>
+    </section>
+
+    <section>
+      <h2>Aggiungi Playlist</h2>
+      <div class="grid">
+        <label>Nome lista
+          <input id="pl_name" placeholder="Film VixSrc"/>
+        </label>
+        <label>URL lista originale
+          <input id="pl_url" placeholder="https://.../lista.m3u"/>
+        </label>
+        <label>Tipo
+          <select id="pl_mode">
+            <option value="video">video</option>
+            <option value="tv">tv</option>
+          </select>
+        </label>
+        <label>Aggiorna ogni (ore)
+          <input id="pl_every" type="number" min="1" value="12"/>
+        </label>
+      </div>
+      <button id="btnAdd">Carica</button>
+    </section>
+
+    <section>
+      <h2>Liste salvate</h2>
+      <div id="lists"></div>
+    </section>
+
+    <!-- ===== Nuova sezione: Gestione Xtream ===== -->
+    <section>
+      <h2>Gestione Xtream</h2>
+      <div class="grid">
+        <label>Nome Xtream
+          <input id="xt_name" placeholder="Pacchetto TiviMate"/>
+        </label>
+        <label>Username
+          <input id="xt_user" placeholder="myuser"/>
+        </label>
+        <label>Password
+          <input id="xt_pass" type="password" placeholder="********"/>
+        </label>
+        <label>Aggiorna ogni (ore)
+          <input id="xt_every" type="number" min="1" value="12"/>
+        </label>
+        <label>Liste LIVE (multi‑selezione)
+          <select id="xt_live" multiple></select>
+        </label>
+        <label>Liste FILM (multi‑selezione)
+          <select id="xt_movies" multiple></select>
+        </label>
+        <label>Liste SERIE (multi‑selezione)
+          <select id="xt_series" multiple></select>
+        </label>
+        <label>Liste MISTE (multi‑selezione)
+          <select id="xt_mixed" multiple></select>
+        </label>
+      </div>
+      <button id="btnAddXtream">Crea Xtream</button>
+    </section>
+
+    <section>
+      <h2>Xtream salvati</h2>
+      <div id="xtreams"></div>
+    </section>
+    <!-- ===== fine aggiunte Xtream ===== -->
+  </div>
+
+  <script src="/static/admin/admin.js"></script>
+</body>
+</html>
