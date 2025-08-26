@@ -124,8 +124,8 @@ def admin_xtreams_add(payload: Dict[str, Any]):
     it = {
         "id": f"xt_{hex(crc32_num((payload.get('name') or '') + str(now_ts())))[2:][:8]}",
         "name": payload.get("name") or "Xtream",
-        "username": (payload.get("username") or "").strip(),
-        "password": (payload.get("password") or "").strip(),
+        "username": payload.get("username", "").strip(),
+        "password": payload.get("password", "").strip(),
         "live_list_ids": payload.get("live_list_ids") or [],
         "movie_list_ids": payload.get("movie_list_ids") or [],
         "series_list_ids": payload.get("series_list_ids") or [],
