@@ -14,12 +14,16 @@ import json
 import urllib.parse
 import argparse
 import os
+import logging
 with open(os.path.join(os.path.dirname(__file__), 'config/domains.json'), encoding='utf-8') as f:
     DOMAINS = json.load(f)
 BASE_URL = f"https://{DOMAINS['animesaturn']}"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 HEADERS = {"User-Agent": USER_AGENT}
 TIMEOUT = 20
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
 def safe_ascii_header(value):
     # Remove or replace non-latin-1 characters (e.g., typographic apostrophes)
@@ -55,103 +59,103 @@ def search_anime(query):
     return results
 
 def get_watch_url(episode_url):
-    print(f"[DEBUG] GET watch URL da: {episode_url}", file=sys.stderr)
+    logger.debug(f"GET watch URL da: {episode_url}")
     resp = requests.get(episode_url, headers=HEADERS, timeout=TIMEOUT)
     resp.raise_for_status()
     html_content = resp.text
     soup = BeautifulSoup(html_content, "html.parser")
     
     # Stampa tutti i link per debug
-    print("[DEBUG] Lista di tutti i link nella pagina:", file=sys.stderr)
+    logger.debug("Lista di tutti i link nella pagina:")
     for a in soup.find_all("a", href=True):
         if "/watch" in a["href"]:
-            print(f"[DEBUG] LINK TROVATO: {a.get_text().strip()[:30]} => {a['href']}", file=sys.stderr)
+            logger.debug(f"LINK TROVATO: {a.get_text().strip()[:30]} => {a['href']}")
     
     # Cerca il link con testo "Guarda lo streaming"
     for a in soup.find_all("a", href=True):
         div = a.find("div")
         if div and "Guarda lo streaming" in div.get_text():
             url = a["href"] if a["href"].startswith("http") else BASE_URL + a["href"]
-            print(f"[DEBUG] Trovato link 'Guarda lo streaming': {url}", file=sys.stderr)
+            logger.debug(f"Trovato link 'Guarda lo streaming': {url}")
             return url
     
     # Cerca qualsiasi link che contenga "/watch"
     for a in soup.find_all("a", href=True):
         if "/watch" in a["href"]:
             url = a["href"] if a["href"].startswith("http") else BASE_URL + a["href"]
-            print(f"[DEBUG] Trovato link generico watch: {url}", file=sys.stderr)
+            logger.debug(f"Trovato link generico watch: {url}")
             return url
     
     # Fallback: cerca il link alla pagina watch
     watch_link = soup.find("a", href=re.compile(r"/watch"))
     if watch_link:
         url = watch_link["href"] if watch_link["href"].startswith("http") else BASE_URL + watch_link["href"]
-        print(f"[DEBUG] Trovato link watch (a): {url}", file=sys.stderr)
+        logger.debug(f"Trovato link watch (a): {url}")
         return url
     
     # Cerca in iframe
     iframe = soup.find("iframe", src=re.compile(r"/watch"))
     if iframe:
         url = iframe["src"] if iframe["src"].startswith("http") else BASE_URL + iframe["src"]
-        print(f"[DEBUG] Trovato link watch (iframe): {url}", file=sys.stderr)
+        logger.debug(f"Trovato link watch (iframe): {url}")
         return url
     
     # Cerca pulsanti con "Guarda" nel testo
     for button in soup.find_all(["button", "a"], class_=re.compile(r"btn|button")):
         if "Guarda" in button.get_text():
-            print(f"[DEBUG] Trovato pulsante con 'Guarda': {button}", file=sys.stderr)
+            logger.debug(f"Trovato pulsante con 'Guarda': {button}")
             if button.name == "a" and button.get("href"):
                 url = button["href"] if button["href"].startswith("http") else BASE_URL + button["href"]
-                print(f"[DEBUG] Trovato link nel pulsante: {url}", file=sys.stderr)
+                logger.debug(f"Trovato link nel pulsante: {url}")
                 return url
     
     # Debug se non trova nulla
-    print(f"[DEBUG] Nessun link watch trovato nella pagina", file=sys.stderr)
+    logger.debug(f"Nessun link watch trovato nella pagina")
     with open("debug_page.html", "w", encoding="utf-8") as f:
         f.write(html_content)
-    print(f"[DEBUG] Salvata pagina di debug in debug_page.html", file=sys.stderr)
+    logger.debug(f"Salvata pagina di debug in debug_page.html")
     return None
 
 def extract_mp4_url(watch_url):
-    print(f"[DEBUG] Analisi URL: {watch_url}", file=sys.stderr)
+    logger.debug(f"Analisi URL: {watch_url}")
     resp = requests.get(watch_url, headers=HEADERS, timeout=TIMEOUT)
     resp.raise_for_status()
     html_content = resp.text
     soup = BeautifulSoup(html_content, "html.parser")
     
-    print(f"[DEBUG] Dimensione HTML: {len(html_content)} caratteri", file=sys.stderr)
+    logger.debug(f"Dimensione HTML: {len(html_content)} caratteri")
     
     # Metodo 1: Cerca direttamente il link mp4 nel sorgente (metodo originale)
     mp4_match = re.search(r'https://[\w\.-]+/[^"\']+\.mp4', html_content)
     if mp4_match:
-        print(f"[DEBUG] Trovato MP4 con metodo 1: {mp4_match.group(0)}", file=sys.stderr)
+        logger.debug(f"Trovato MP4 con metodo 1: {mp4_match.group(0)}")
         return mp4_match.group(0)
     
     # Metodo 2: Analizza i tag video/source (metodo originale)
     video = soup.find("video", class_="vjs-tech")
     if video:
-        print(f"[DEBUG] Trovato video con classe vjs-tech", file=sys.stderr)
+        logger.debug(f"Trovato video con classe vjs-tech")
         source = video.find("source")
         if source and source.get("src"):
-            print(f"[DEBUG] Trovato source in vjs-tech: {source['src']}", file=sys.stderr)
+            logger.debug(f"Trovato source in vjs-tech: {source['src']}")
             return source["src"]
     else:
-        print("[DEBUG] Nessun video con classe vjs-tech trovato", file=sys.stderr)
+        logger.debug("Nessun video con classe vjs-tech trovato")
     
     # Metodo 3: Cerca nel tag video con classe jw-video (nuovo metodo)
     jw_video = soup.find("video", class_="jw-video")
     if jw_video:
-        print(f"[DEBUG] Trovato video con classe jw-video", file=sys.stderr)
+        logger.debug(f"Trovato video con classe jw-video")
         if jw_video.get("src"):
-            print(f"[DEBUG] Trovato src in jw-video: {jw_video['src']}", file=sys.stderr)
+            logger.debug(f"Trovato src in jw-video: {jw_video['src']}")
             return jw_video["src"]
     else:
-        print("[DEBUG] Nessun video con classe jw-video trovato", file=sys.stderr)
+        logger.debug("Nessun video con classe jw-video trovato")
     
     # Metodo 4: Cerca link m3u8 nel jwplayer setup
     m3u8_match = re.search(r'jwplayer\([\'"]player_hls[\'"]\)\.setup\(\{\s*file:\s*[\'"]([^"\']+\.m3u8)[\'"]', html_content)
     if m3u8_match:
-        print(f"[DEBUG] Trovato m3u8 con metodo jwplayer: {m3u8_match.group(1)}", file=sys.stderr)
+        logger.debug(f"Trovato m3u8 con metodo jwplayer: {m3u8_match.group(1)}")
         return m3u8_match.group(1)
     
     # Cercare in altri posti della pagina per link alternativi
@@ -161,7 +165,7 @@ def extract_mp4_url(watch_url):
             player_alternativo = a["href"]
             if not player_alternativo.startswith('http'):
                 player_alternativo = BASE_URL + player_alternativo
-            print(f"[DEBUG] Trovato link a player alternativo: {player_alternativo}", file=sys.stderr)
+            logger.debug(f"Trovato link a player alternativo: {player_alternativo}")
             break
     
     # Se trovato un link al player alternativo, visita quella pagina
@@ -172,48 +176,48 @@ def extract_mp4_url(watch_url):
             alt_soup = BeautifulSoup(alt_resp.text, "html.parser")
             alt_html = alt_resp.text
             
-            print(f"[DEBUG] Dimensione HTML player alternativo: {len(alt_html)} caratteri", file=sys.stderr)
+            logger.debug(f"Dimensione HTML player alternativo: {len(alt_html)} caratteri")
             
             # Cerca mp4 nei metodi alternativi
             alt_mp4_match = re.search(r'https://[\w\.-]+/[^"\']+\.mp4', alt_html)
             if alt_mp4_match:
-                print(f"[DEBUG] Trovato MP4 nel player alternativo: {alt_mp4_match.group(0)}", file=sys.stderr)
+                logger.debug(f"Trovato MP4 nel player alternativo: {alt_mp4_match.group(0)}")
                 return alt_mp4_match.group(0)
             
             # Cerca source in video
             alt_video = alt_soup.find("video")
             if alt_video:
-                print(f"[DEBUG] Trovato video nel player alternativo", file=sys.stderr)
+                logger.debug(f"Trovato video nel player alternativo")
                 alt_source = alt_video.find("source")
                 if alt_source and alt_source.get("src"):
-                    print(f"[DEBUG] Trovato source nel player alternativo: {alt_source['src']}", file=sys.stderr)
+                    logger.debug(f"Trovato source nel player alternativo: {alt_source['src']}")
                     return alt_source["src"]
             
             # Cerca m3u8 nel player alternativo
             m3u8_match = re.search(r'src=[\'"]([^"\']+\.m3u8)[\'"]', alt_html)
             if m3u8_match:
-                print(f"[DEBUG] Trovato m3u8 nel player alternativo: {m3u8_match.group(1)}", file=sys.stderr)
+                logger.debug(f"Trovato m3u8 nel player alternativo: {m3u8_match.group(1)}")
                 return m3u8_match.group(1)
             
             # Stampa i primi server disponibili per debug
             server_dropdown = alt_soup.find("div", class_="dropdown-menu")
             if server_dropdown:
-                print("[DEBUG] Server disponibili nel player alternativo:", file=sys.stderr)
+                logger.debug("Server disponibili nel player alternativo:")
                 for a in server_dropdown.find_all("a", href=True):
-                    print(f"[DEBUG] - {a.text.strip()}: {a['href']}", file=sys.stderr)
+                    logger.debug(f"- {a.text.strip()}: {a['href']}")
             
             # Prova a trovare iframe con video
             iframe = alt_soup.find("iframe")
             if iframe and iframe.get("src"):
-                print(f"[DEBUG] Trovato iframe nel player alternativo: {iframe['src']}", file=sys.stderr)
+                logger.debug(f"Trovato iframe nel player alternativo: {iframe['src']}")
             
         except Exception as e:
-            print(f"[DEBUG] Errore cercando nel player alternativo: {e}", file=sys.stderr)
+            logger.debug(f"Errore cercando nel player alternativo: {e}")
     else:
-        print("[DEBUG] Nessun player alternativo trovato", file=sys.stderr)
+        logger.debug("Nessun player alternativo trovato")
     
     # Debug finale
-    print("[DEBUG] Nessun link trovato dopo tutti i tentativi", file=sys.stderr)
+    logger.debug("Nessun link trovato dopo tutti i tentativi")
     return None
 
 def get_episodes_list(anime_url):
@@ -264,7 +268,7 @@ def search_anime_html(query, max_pages=3):
                 href = BASE_URL + href
             if not any(r['url'] == href for r in results):
                 results.append({'title': title, 'url': href, 'page': page})
-                print(f"[DEBUG] Trovato titolo: {title} (url: {href})", file=sys.stderr)
+                logger.debug(f"Trovato titolo: {title} (url: {href})")
         pagination = soup.select_one('ul.pagination')
         next_btn = soup.select_one('li.page-item.next:not(.disabled)')
         if not (pagination and next_btn):
@@ -273,15 +277,15 @@ def search_anime_html(query, max_pages=3):
     return results
 
 def search_anime_by_title_or_malid(title, mal_id):
-    print(f"[DEBUG] INIZIO: title={title}, mal_id={mal_id}", file=sys.stderr)
+    logger.debug(f"INIZIO: title={title}, mal_id={mal_id}")
 
     # Helper function to check a list of results for a MAL ID match
     def check_results_for_mal_id(results_list, target_mal_id, search_step_name):
         if not results_list:
-            print(f"[DEBUG] {search_step_name}: Nessun risultato da controllare.", file=sys.stderr)
+            logger.debug(f"{search_step_name}: Nessun risultato da controllare.")
             return None
         
-        print(f"[DEBUG] {search_step_name}: Controllo {len(results_list)} risultati...", file=sys.stderr)
+        logger.debug(f"{search_step_name}: Controllo {len(results_list)} risultati...")
         matched_items = []
         for item in results_list:
             try:
@@ -293,15 +297,15 @@ def search_anime_by_title_or_malid(title, mal_id):
                     found_id_match = re.search(r"myanimelist\.net/anime/(\d+)", mal_btn["href"])
                     if found_id_match:
                         found_id = found_id_match.group(1)
-                        print(f"[DEBUG] -> Controllo '{item['title']}': trovato MAL ID {found_id} (cerco {target_mal_id})", file=sys.stderr)
+                        logger.debug(f"-> Controllo '{item['title']}': trovato MAL ID {found_id} (cerco {target_mal_id})")
                         if found_id == str(target_mal_id):
-                            print(f"[DEBUG] MATCH TROVATO!", file=sys.stderr)
+                            logger.debug(f"MATCH TROVATO!")
                             matched_items.append(item)
             except Exception as e:
-                print(f"[DEBUG] Errore visitando '{item['title']}': {e}", file=sys.stderr)
+                logger.debug(f"Errore visitando '{item['title']}': {e}")
         if matched_items:
             return matched_items
-        print(f"[DEBUG] {search_step_name}: Nessun match trovato.", file=sys.stderr)
+        logger.debug(f"{search_step_name}: Nessun match trovato.")
         return None  # No match in this batch
 
     # --- Fallback Chain ---
@@ -309,26 +313,26 @@ def search_anime_by_title_or_malid(title, mal_id):
     # 1. Ricerca diretta per titolo completo
     direct_results = search_anime(title)
     matches = check_results_for_mal_id(direct_results, mal_id, "Step 1: Ricerca Diretta") or []
-    print(f"[DEBUG] matches dopo ricerca diretta: {matches}", file=sys.stderr)
+    logger.debug(f"matches dopo ricerca diretta: {matches}")
 
     # 2. Fallback: Titolo troncato all'apostrofo
     if not matches and ("'" in title or "’" in title or "‘" in title):
         last_apos = max(title.rfind(c) for c in ["'", "’", "‘"])
         if last_apos != -1:
             truncated_title = title[:last_apos].strip()
-            print(f"[DEBUG] Titolo troncato per Fallback #1: '{truncated_title}'", file=sys.stderr)
+            logger.debug(f"Titolo troncato per Fallback #1: '{truncated_title}'")
             truncated_results = search_anime(truncated_title)
             matches += check_results_for_mal_id(truncated_results, mal_id, "Step 2: Ricerca Titolo Troncato") or []
-    print(f"[DEBUG] matches dopo troncato: {matches}", file=sys.stderr)
+    logger.debug(f"matches dopo troncato: {matches}")
 
     # 3. Fallback finale: Ricerca fuzzy con prime 3 lettere
     if not matches:
-        print(f"[DEBUG] PRIMA DELLA FUZZY: matches={matches}", file=sys.stderr)
+        logger.debug(f"PRIMA DELLA FUZZY: matches={matches}")
         short_key = title[:3]
-        print(f"[DEBUG] Avvio fallback fuzzy: chiave '{short_key}'", file=sys.stderr)
+        logger.debug(f"Avvio fallback fuzzy: chiave '{short_key}'")
         # Usa la ricerca HTML per la fuzzy search
         fuzzy_results = search_anime_html(short_key)
-        print(f"[DEBUG] Fuzzy search ha trovato {len(fuzzy_results)} risultati", file=sys.stderr)
+        logger.debug(f"Fuzzy search ha trovato {len(fuzzy_results)} risultati")
         # Evita duplicati
         urls_to_skip = {r['url'] for r in (direct_results or [])}
         unique_fuzzy_results = [r for r in fuzzy_results if r['url'] not in urls_to_skip]
@@ -339,7 +343,7 @@ def search_anime_by_title_or_malid(title, mal_id):
         found_count = 0
         for item in unique_fuzzy_results:
             try:
-                print(f"[DEBUG] Visito URL: {item['url']}", file=sys.stderr)
+                logger.debug(f"Visito URL: {item['url']}")
                 resp = requests.get(item["url"], headers=HEADERS, timeout=TIMEOUT)
                 resp.raise_for_status()
                 soup = BeautifulSoup(resp.text, "html.parser")
@@ -348,9 +352,9 @@ def search_anime_by_title_or_malid(title, mal_id):
                     found_id_match = re.search(r"myanimelist\.net/anime/(\d+)", mal_btn["href"])
                     if found_id_match:
                         found_id = found_id_match.group(1)
-                        print(f"[DEBUG] -> Controllo '{item['title']}': trovato MAL ID {found_id} (cerco {mal_id})", file=sys.stderr)
+                        logger.debug(f"-> Controllo '{item['title']}': trovato MAL ID {found_id} (cerco {mal_id})")
                         if found_id == str(mal_id):
-                            print(f"[DEBUG] MATCH TROVATO!", file=sys.stderr)
+                            logger.debug(f"MATCH TROVATO!")
                             t_upper = item['title'].upper()
                             if not found_normal and '(ITA' not in t_upper and '(CR' not in t_upper:
                                 found_normal = item
@@ -364,7 +368,7 @@ def search_anime_by_title_or_malid(title, mal_id):
                             if found_normal and found_ita and found_cr:
                                 break
             except Exception as e:
-                print(f"[DEBUG] Errore visitando '{item['title']}': {e}", file=sys.stderr)
+                logger.debug(f"Errore visitando '{item['title']}': {e}")
             # Se hai già trovato normal e ita e sei oltre la terza pagina, esci
             if item.get('page', 1) >= 3 and found_normal and found_ita:
                 break
@@ -375,7 +379,7 @@ def search_anime_by_title_or_malid(title, mal_id):
             fuzzy_matches.append(found_ita)
         if found_cr:
             fuzzy_matches.append(found_cr)
-        print(f"[DEBUG] fuzzy_matches trovati: {fuzzy_matches}", file=sys.stderr)
+        logger.debug(f"fuzzy_matches trovati: {fuzzy_matches}")
         if fuzzy_matches and len(fuzzy_matches) >= 2:
             seen = set()
             deduped = []
@@ -385,7 +389,7 @@ def search_anime_by_title_or_malid(title, mal_id):
                     seen.add(m['url'])
             return deduped
         matches += fuzzy_matches
-    print(f"[DEBUG] matches finali: {matches}", file=sys.stderr)
+    logger.debug(f"matches finali: {matches}")
 
     if matches:
         # Deduplica per url
@@ -397,7 +401,7 @@ def search_anime_by_title_or_malid(title, mal_id):
                 seen.add(m['url'])
         return deduped
 
-    print(f"[DEBUG] NESSUN MATCH TROVATO dopo tutti i tentativi.", file=sys.stderr)
+    logger.debug(f"NESSUN MATCH TROVATO dopo tutti i tentativi.")
     return []
 
 def main():

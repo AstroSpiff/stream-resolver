@@ -12,6 +12,7 @@ import re
 import time
 import argparse
 import sys
+import logging
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin, unquote
 import json, os
@@ -28,6 +29,9 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1"
 }
 TIMEOUT = 20
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
 def get_session_tokens():
     """Recupera token di sessione per le richieste API"""
@@ -55,7 +59,7 @@ def search_anime(query, dubbed=False):
     try:
         session_data = get_session_tokens()
     except Exception as e:
-        print(f"⚠️ Errore ottenimento token di sessione: {e}", file=sys.stderr)
+        logger.warning("⚠️ Errore ottenimento token di sessione: %s", e)
         return []
 
     results = []
@@ -83,7 +87,7 @@ def search_anime(query, dubbed=False):
             response.raise_for_status()
             
             data = response.json()
-            print(f"Debug: Risposta da {endpoint['url']}: {data.get('records', [])[:2]}", file=sys.stderr)
+            logger.debug("Risposta da %s: %s", endpoint['url'], data.get('records', [])[:2])
 
             for record in data.get("records", []):
                 if not record or not record.get("id"):
@@ -102,11 +106,11 @@ def search_anime(query, dubbed=False):
                             "episodes_count": record.get("episodes_count", 0)
                         })
         except Exception as e:
-            # Print error to stderr so it doesn't interfere with JSON output
-            print(f"⚠️ Errore ricerca {endpoint['url']}: {e}", file=sys.stderr)
+            # Log error so it doesn't interfere with JSON output
+            logger.warning("⚠️ Errore ricerca %s: %s", endpoint['url'], e)
             continue
 
-    print(f"Debug: Trovati {len(results)} risultati per '{query}'", file=sys.stderr)
+    logger.debug("Trovati %d risultati per '%s'", len(results), query)
     return results
 
 def search_anime_with_fallback(query, dubbed=False):
@@ -161,7 +165,7 @@ def get_episodes_list(anime_id):
             start = end + 1
 
     except Exception as e:
-        print(f"⚠️ Errore recupero episodi: {e}", file=sys.stderr)
+        logger.warning("⚠️ Errore recupero episodi: %s", e)
 
     return episodes
 
@@ -174,7 +178,7 @@ def get_video_page_content(anime_id, anime_slug, episode_id):
         response.raise_for_status()
         return response.text
     except Exception as e:
-        print(f"⚠️ Errore caricamento pagina episodio: {e}", file=sys.stderr)
+        logger.warning("⚠️ Errore caricamento pagina episodio: %s", e)
         return None
 
 def extract_mp4_from_vixcloud(embed_url):
@@ -267,7 +271,7 @@ def extract_mp4_from_vixcloud(embed_url):
         return None
 
     except Exception as e:
-        print(f"⚠️ Errore estrazione VixCloud: {e}", file=sys.stderr)
+        logger.warning("⚠️ Errore estrazione VixCloud: %s", e)
         return None
 
 def get_stream(anime_id, anime_slug, episode_id):
