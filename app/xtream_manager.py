@@ -22,6 +22,7 @@ PLAYLISTS_JSON = os.path.join(CONFIG_DIR, "playlists.json")
 XTREAMS_JSON   = os.path.join(CONFIG_DIR, "xtreams.json")
 SETTINGS_JSON  = os.path.join(CONFIG_DIR, "settings.json")
 PLAYLISTS_DIR  = os.path.join(CONFIG_DIR, "playlists")
+CATEGORY_IDS_JSON = os.path.join(CONFIG_DIR, "category_ids.json")
 
 os.makedirs(PLAYLISTS_DIR, exist_ok=True)
 
@@ -42,6 +43,8 @@ def save_json(path: str, data: Any):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+CATEGORY_IDS: Dict[str, str] = load_json(CATEGORY_IDS_JSON, {})
 
 def crc32_num(s: str) -> int:
     return zlib.crc32(s.encode("utf-8")) & 0xFFFFFFFF
@@ -207,6 +210,15 @@ def guess_is_movie(item: M3UItem) -> bool:
 def stable_category_id(name: str, base: int) -> str:
     return str(base + (crc32_num(name) % 8999))
 
+def get_category_id(name: str, base: int) -> str:
+    cid = CATEGORY_IDS.get(name)
+    if cid:
+        return cid
+    cid = stable_category_id(name, base)
+    CATEGORY_IDS[name] = cid
+    save_json(CATEGORY_IDS_JSON, CATEGORY_IDS)
+    return cid
+
 def normalize_group_for_type(group: str, typ: str) -> str:
     g = group.strip()
     if typ == "vod":
@@ -236,7 +248,8 @@ def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[D
             continue
         mid = try_extract_movie_id(it.url) or str(crc32_num(it.url))
         cat_name = normalize_group_for_type(it.group or "Film", "vod")
-        cat_id = cat_map.setdefault(cat_name, stable_category_id(cat_name, 2000))
+        cat_id = get_category_id(cat_name, 2000)
+        cat_map[cat_name] = cat_id
         name = it.title.strip()
         stream_icon = it.tvg_logo or ""
         out.append({
@@ -297,7 +310,8 @@ def build_series_collections(request: Request, items: Iterable[M3UItem]) -> Tupl
         name = re.sub(r"\bS(\d{1,2})E(\d{1,2})\b", "", it.title, flags=re.I).strip() or f"Serie {sid}"
         cover = it.tvg_logo or ""
         cat_name = normalize_group_for_type(it.group or "Serie", "series")
-        cat_id = cat_map.setdefault(cat_name, stable_category_id(cat_name, 3000))
+        cat_id = get_category_id(cat_name, 3000)
+        cat_map[cat_name] = cat_id
 
         s = series_map.setdefault(sid, {
             "series_id": sid,
@@ -331,7 +345,8 @@ def build_live_streams(request: Request, items: Iterable[M3UItem]) -> Tuple[List
     num = 1
     for it in items:
         cat_name = normalize_group_for_type(it.group or "Live", "live")
-        cat_id = cat_map.setdefault(cat_name, stable_category_id(cat_name, 1000))
+        cat_id = get_category_id(cat_name, 1000)
+        cat_map[cat_name] = cat_id
         token = ""
         try:
             p = urllib.parse.urlparse(it.url)
