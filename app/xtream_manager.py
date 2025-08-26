@@ -226,7 +226,7 @@ def normalize_group_for_type(group: str, typ: str) -> str:
     elif typ == "series":
         g = re.sub(r"^(serietv|serie)\s*-\s*", "", g, flags=re.I)
     elif typ == "live":
-        pass
+        g = re.sub(r"^(live|tv)\s*-\s*", "", g, flags=re.I)
     return g or "Generale"
 
 # ====== DIRECT SOURCE ======
