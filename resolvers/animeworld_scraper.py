@@ -14,6 +14,7 @@ import argparse, sys, re, json, os, datetime
 from typing import List, Dict, Any, Optional
 import requests
 from bs4 import BeautifulSoup
+import logging
 
 BASE_DIR = os.path.dirname(__file__)
 with open(os.path.join(BASE_DIR, 'config/domains.json'), encoding='utf-8') as f:
@@ -32,6 +33,9 @@ TITLE_REPL = {
 }
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 
 def rand_headers():
     return {
@@ -95,7 +99,7 @@ def search(query: str, date: str = None) -> List[Dict[str, Any]]:
     urls.append(f"{BASE_URL}/filter?sort=2&keyword={q_norm}")
     for url in urls:
         try:
-            print(f"[AW-DEBUG] Search URL: {url}", file=sys.stderr)
+            logger.debug("Search URL: %s", url)
             r, ck = fetch(url)
             if not r.ok:
                 continue
@@ -127,9 +131,9 @@ def search(query: str, date: str = None) -> List[Dict[str, Any]]:
                                 match_date = (release_date_fmt == date or
                                               release_date_fmt == (date_object + datetime.timedelta(days=1)).strftime("%Y-%m-%d") or
                                               release_date_fmt == (date_object - datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
-                                print(f"[AW-DEBUG] {name} release: {release_date_fmt} vs {date} -> {match_date}", file=sys.stderr)
+                                logger.debug("%s release: %s vs %s -> %s", name, release_date_fmt, date, match_date)
                     except Exception as e:
-                        print(f"[AW-DEBUG] errore data: {e}", file=sys.stderr)
+                        logger.debug("Errore data: %s", e)
                 if not match_date:
                     continue
                 if slug in seen:
@@ -142,7 +146,7 @@ def search(query: str, date: str = None) -> List[Dict[str, Any]]:
                     'episodes_count': 0
                 })
         except Exception as e:
-            print(f"[AW-DEBUG] errore search: {e}", file=sys.stderr)
+            logger.debug("Errore search: %s", e)
         if results:
             break
     return results
