@@ -124,8 +124,8 @@ def admin_xtreams_add(payload: Dict[str, Any]):
     it = {
         "id": f"xt_{hex(crc32_num((payload.get('name') or '') + str(now_ts())))[2:][:8]}",
         "name": payload.get("name") or "Xtream",
-        "username": payload.get("username") or "",
-        "password": payload.get("password") or "",
+        "username": (payload.get("username") or "").strip(),
+        "password": (payload.get("password") or "").strip(),
         "live_list_ids": payload.get("live_list_ids") or [],
         "movie_list_ids": payload.get("movie_list_ids") or [],
         "series_list_ids": payload.get("series_list_ids") or [],
@@ -401,6 +401,8 @@ def build_live_streams(request: Request, items: Iterable[M3UItem]) -> Tuple[List
 
 # ====== AUTH XTREAM ======
 def require_xtream(xt_id: str, username: str, password: str) -> Dict[str, Any]:
+    username = username.strip()
+    password = password.strip()
     xs = _xtreams()
     for row in xs:
         if row.get("id") == xt_id and row.get("username") == username and row.get("password") == password:
