@@ -20,6 +20,7 @@ async function jdel(url) {
 function byId(id){ return document.getElementById(id); }
 
 let _lists = []; // per popolare le select Xtream
+let _editingXt = null; // id xtream in modifica
 
 // ---------------- Settings ----------------
 async function loadSettings(){
@@ -194,6 +195,12 @@ async function populateXtreamSelects(){
 function valuesFromSelect(sel){
   return Array.from(sel.selectedOptions).map(o=>o.value);
 }
+function setSelectValues(sel, values){
+  const vals = values || [];
+  for(const o of sel.options){
+    o.selected = vals.includes(o.value);
+  }
+}
 function buildServerUrl(x){
   const base = canonicalServerBase();
   return base + "/xtream/" + x.id;
@@ -208,7 +215,7 @@ function buildFullM3UUrl(x){
 }
 
 // ---------------- Xtream: CRUD ----------------
-async function addXtream(){
+async function saveXtream(){
   const name = byId("xt_name").value.trim();
   const username = byId("xt_user").value.trim();
   const password = byId("xt_pass").value;
@@ -218,15 +225,47 @@ async function addXtream(){
   const series_list_ids = valuesFromSelect(byId("xt_series"));
   const mixed_list_ids  = valuesFromSelect(byId("xt_mixed"));
   if(!name || !username || !password){ alert("Compila nome, username e password"); return; }
+  const payload = { name, username, password, every_hours, live_list_ids, movie_list_ids, series_list_ids, mixed_list_ids };
   try{
-    await jpost("/admin/xtreams", { name, username, password, every_hours, live_list_ids, movie_list_ids, series_list_ids, mixed_list_ids });
-    byId("xt_name").value = "";
-    byId("xt_user").value = "";
-    byId("xt_pass").value = "";
+    if(_editingXt){
+      await jpost(`/admin/xtreams/${_editingXt}/update`, payload);
+    }else{
+      await jpost("/admin/xtreams", payload);
+    }
+    resetXtreamForm();
     await loadXtreams();
   }catch(e){
     alert("Errore: " + e.message);
   }
+}
+
+function resetXtreamForm(){
+  byId("xt_name").value = "";
+  byId("xt_user").value = "";
+  byId("xt_pass").value = "";
+  byId("xt_every").value = "12";
+  setSelectValues(byId("xt_live"), []);
+  setSelectValues(byId("xt_movies"), []);
+  setSelectValues(byId("xt_series"), []);
+  setSelectValues(byId("xt_mixed"), []);
+  _editingXt = null;
+  const btn = byId("btnSaveXtream");
+  if(btn) btn.textContent = "Crea Xtream";
+}
+
+function startEditXtream(x){
+  _editingXt = x.id;
+  byId("xt_name").value = x.name || "";
+  byId("xt_user").value = x.username || "";
+  byId("xt_pass").value = x.password || "";
+  byId("xt_every").value = x.every_hours || 12;
+  setSelectValues(byId("xt_live"), x.live_list_ids || []);
+  setSelectValues(byId("xt_movies"), x.movie_list_ids || []);
+  setSelectValues(byId("xt_series"), x.series_list_ids || []);
+  setSelectValues(byId("xt_mixed"), x.mixed_list_ids || []);
+  const btn = byId("btnSaveXtream");
+  if(btn) btn.textContent = "Salva Modifiche";
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 async function loadXtreams(){
@@ -269,12 +308,14 @@ async function loadXtreams(){
           ${details}
         </div>
         <div class="row-ops">
+          <button class="small" data-act="edit">Modifica</button>
           <button class="small" data-act="refresh">Aggiorna</button>
           <button class="small" data-act="copy-server">Copia URL server</button>
           <button class="small" data-act="copy-full">Copia URL completa</button>
           <button class="small danger" data-act="del">Elimina</button>
         </div>
       `;
+      row.querySelector('[data-act="edit"]').onclick = ()=>{ startEditXtream(x); };
       row.querySelector('[data-act="refresh"]').onclick = async ()=>{
         const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
         await jpost(`/admin/xtreams/${x.id}/update`, { every_hours: hrs, refresh: true });
@@ -312,8 +353,9 @@ document.addEventListener("DOMContentLoaded", ()=>{
   byId("btnSave").onclick = saveSettings;
   byId("btnConvert").onclick = convertOnce;
   byId("btnAdd").onclick = addList;
-  const btnAddXt = byId("btnAddXtream");
-  if(btnAddXt) btnAddXt.onclick = addXtream;
+  const btnSaveXt = byId("btnSaveXtream");
+  if(btnSaveXt) btnSaveXt.onclick = saveXtream;
+  resetXtreamForm();
   loadSettings().then(async ()=>{
     await loadLists();
     await loadXtreams();

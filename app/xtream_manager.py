@@ -112,7 +112,24 @@ def _xtreams() -> List[Dict[str, Any]]:
     return load_json(XTREAMS_JSON, [])
 
 def _save_xtreams(items: List[Dict[str, Any]]):
-    save_json(XTREAMS_JSON, items)
+    """Persist xtream configs merging with existing ones.
+
+    Items are matched by their ``id``; when an item with the same id already
+    exists on disk, values from ``items`` override the stored ones. This allows
+    partial updates without having to load and rewrite the whole list
+    externally.
+    """
+    existing = {x.get("id"): x for x in load_json(XTREAMS_JSON, [])}
+    for it in items:
+        iid = it.get("id")
+        if not iid:
+            continue
+        if iid in existing:
+            # override existing values
+            existing[iid].update(it)
+        else:
+            existing[iid] = it
+    save_json(XTREAMS_JSON, list(existing.values()))
 
 # ====== ADMIN ENDPOINTS ======
 @router.get("/admin/xtreams.json")
@@ -154,8 +171,19 @@ def admin_xtreams_update(xt_id: str, payload: Dict[str, Any]):
             break
     if not found:
         raise HTTPException(404, "Not Found")
+    # simple scalar fields
+    if "name" in payload:
+        found["name"] = payload["name"]
+    if "username" in payload:
+        found["username"] = payload.get("username", "").strip()
+    if "password" in payload:
+        found["password"] = payload.get("password", "").strip()
     if "every_hours" in payload:
         found["every_hours"] = int(payload["every_hours"])
+    # lists of playlist ids
+    for key in ("live_list_ids", "movie_list_ids", "series_list_ids", "mixed_list_ids"):
+        if key in payload:
+            found[key] = payload.get(key) or []
     if payload.get("refresh"):
         found["last_refresh"] = now_ts()
     _save_xtreams(items)
