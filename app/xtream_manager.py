@@ -216,9 +216,20 @@ def _read_playlist(pl_id: str) -> List[M3UItem]:
         return []
 
 # ====== CLASSIFICAZIONE ======
-MOVIE_RE = re.compile(r"/movie/(\d+)", re.I)
-TV_RE    = re.compile(r"/(?:tv|series)/(\d+)/(?:season/)?(\d+)/(\d+)", re.I)
-TV_RE_SHORT = re.compile(r"/(?:tv|series)/(\d+)/(\d+)/(\d+)", re.I)
+# Paths from Xtream Codes often include username and password segments
+# before numeric identifiers. Allow two arbitrary segments after the base
+# prefix (``movie/`` or ``series|tv/``) so that URLs like
+# ``/series/user/pass/123/1/2.m3u8`` are recognised in addition to the
+# simpler ``/series/123/1/2`` form.
+MOVIE_RE = re.compile(r"/movie/(?:[^/]+/[^/]+/)?(\d+)", re.I)
+TV_RE    = re.compile(
+    r"/(?:tv|series)/(?:[^/]+/[^/]+/)?(\d+)/(?:season/)?(\d+)/(\d+)",
+    re.I,
+)
+TV_RE_SHORT = re.compile(
+    r"/(?:tv|series)/(?:[^/]+/[^/]+/)?(\d+)/(\d+)/(\d+)",
+    re.I,
+)
 
 def try_extract_movie_id(url: str) -> Optional[str]:
     m = MOVIE_RE.search(url)
