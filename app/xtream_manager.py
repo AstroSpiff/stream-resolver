@@ -9,6 +9,7 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from collections import defaultdict
+import threading
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, JSONResponse, RedirectResponse
@@ -44,7 +45,10 @@ def save_json(path: str, data: Any):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-CATEGORY_IDS: Dict[str, str] = load_json(CATEGORY_IDS_JSON, {})
+# Lock to guard access to CATEGORY_IDS and its JSON file
+CATEGORY_IDS_LOCK = threading.Lock()
+with CATEGORY_IDS_LOCK:
+    CATEGORY_IDS: Dict[str, str] = load_json(CATEGORY_IDS_JSON, {})
 
 def crc32_num(s: str) -> int:
     return zlib.crc32(s.encode("utf-8")) & 0xFFFFFFFF
@@ -248,13 +252,14 @@ def stable_category_id(name: str, base: int) -> str:
     return str(base + (crc32_num(name) % 8999))
 
 def get_category_id(name: str, base: int) -> str:
-    cid = CATEGORY_IDS.get(name)
-    if cid:
+    with CATEGORY_IDS_LOCK:
+        cid = CATEGORY_IDS.get(name)
+        if cid:
+            return cid
+        cid = stable_category_id(name, base)
+        CATEGORY_IDS[name] = cid
+        save_json(CATEGORY_IDS_JSON, CATEGORY_IDS)
         return cid
-    cid = stable_category_id(name, base)
-    CATEGORY_IDS[name] = cid
-    save_json(CATEGORY_IDS_JSON, CATEGORY_IDS)
-    return cid
 
 def normalize_group_for_type(group: str, typ: str) -> str:
     g = group.strip()
