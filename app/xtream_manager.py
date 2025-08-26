@@ -179,11 +179,18 @@ def admin_xtreams_update(xt_id: str, payload: Dict[str, Any]):
     if "password" in payload:
         found["password"] = payload.get("password", "").strip()
     if "every_hours" in payload:
-        found["every_hours"] = int(payload["every_hours"])
+        try:
+            ehours = int(payload["every_hours"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Invalid every_hours")
+        found["every_hours"] = max(1, ehours)
     # lists of playlist ids
     for key in ("live_list_ids", "movie_list_ids", "series_list_ids", "mixed_list_ids"):
         if key in payload:
-            found[key] = payload.get(key) or []
+            val = payload[key]
+            if not isinstance(val, list):
+                raise HTTPException(400, f"{key} must be a list")
+            found[key] = [str(x) for x in val]
     if payload.get("refresh"):
         found["last_refresh"] = now_ts()
     _save_xtreams(items)
