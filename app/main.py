@@ -1,27 +1,29 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
+import json
+import logging
 import os
 import re
-import json
 import time
-import uuid
 import urllib.parse
-import logging
+import uuid
 from typing import Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Body, Path
-from fastapi.responses import JSONResponse, RedirectResponse, PlainTextResponse, FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import Body, FastAPI, HTTPException, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, AnyHttpUrl
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               PlainTextResponse, RedirectResponse)
+from fastapi.staticfiles import StaticFiles
+from pydantic import AnyHttpUrl, BaseModel
 
+from app.xtream_manager import setup_xtream
+
+from .adapter import ResolverError, run_resolver
 # ========= resolver esterni =========
 # (restano invariati; usiamo ancora adapter/registry per Vavoo & co.)
 from .registry import pick_script_for
-from .adapter import run_resolver, ResolverError
-
-from app.xtream_manager import setup_xtream
 
 # configure logging at application level
 logging.basicConfig(level=logging.INFO)
@@ -133,7 +135,7 @@ class ResolveIn(BaseModel):
 def wrap_proxy(url: str, enabled: bool) -> str:
     if enabled and MEDIAFLOW_PROXY:
         base = MEDIAFLOW_PROXY.rstrip("/")
-        return f"{base}/fetch?target={url}"
+        return f"{base}/fetch?target={urllib.parse.quote(url, safe='')}"
     return url
 
 def _handle_generic(url: str, kind: str, headers: Optional[Dict[str, str]], use_proxy: bool):
