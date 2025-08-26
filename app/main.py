@@ -405,6 +405,7 @@ def admin_add_playlist(data: PlaylistCreate):
     return {"ok": True, "id": pid}
 
 class PlaylistUpdate(BaseModel):
+    url: Optional[str] = None
     every_hours: Optional[int] = None
     resolver_url: Optional[str] = None
     refresh: bool = False
@@ -415,6 +416,12 @@ async def admin_update_playlist(pid: str = Path(...), data: PlaylistUpdate = Bod
     it = _find_playlist(items, pid)
     if not it:
         raise HTTPException(status_code=404, detail="Playlist non trovata")
+
+    if data.url is not None:
+        new_url = (data.url or "").strip()
+        if not new_url or not (new_url.lower().startswith("http://") or new_url.lower().startswith("https://")):
+            raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+        it["url"] = new_url
 
     if data.every_hours is not None:
         it["every_hours"] = max(1, int(data.every_hours))
