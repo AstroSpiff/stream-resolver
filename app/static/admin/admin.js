@@ -95,20 +95,31 @@ async function loadLists(){
         <div class="row-main">
           <div><b>${it.name}</b></div>
           <div class="muted">${it.url}</div>
+          <div class="muted">${link}</div>
           <div>Tipo: <b>${it.mode}</b> &nbsp; • &nbsp; Aggiorna ogni
             <input class="hrs" type="number" min="1" value="${it.every_hours}"/> ore
           </div>
+          <div>Resolver: <input class="resolver" value="${it.resolver_url || ""}" placeholder="default"/></div>
           <div class="muted">Ultimo refresh: ${it.last_refresh ? new Date(it.last_refresh*1000).toLocaleString() : "mai"}</div>
         </div>
         <div class="row-ops">
-          <button class="small" data-act="refresh">Aggiorna</button>
+          <button class="small" data-act="save">Aggiorna</button>
+          <button class="small" data-act="refresh">Refresh</button>
           <button class="small" data-act="copy">Copia link</button>
           <button class="small danger" data-act="del">Elimina</button>
         </div>
       `;
+      row.querySelector('[data-act="save"]').onclick = async ()=>{
+        const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
+        const resolver = row.querySelector(".resolver").value.trim();
+        await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, resolver_url: resolver });
+        await loadLists();
+        await populateXtreamSelects();
+      };
       row.querySelector('[data-act="refresh"]').onclick = async ()=>{
         const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
-        await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, refresh: true });
+        const resolver = row.querySelector(".resolver").value.trim();
+        await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, resolver_url: resolver, refresh: true });
         await loadLists();
         await populateXtreamSelects();
       };
