@@ -23,8 +23,17 @@ def xm(monkeypatch, tmp_path):
 def test_try_extract_tv_triplet_series(xm):
     url1 = "http://host/series/123/season/1/2"
     url2 = "http://host/series/123/1/2"
+    url3 = "http://host/series/user/pass/123/1/2.m3u8"
     assert xm.try_extract_tv_triplet(url1) == ("123", 1, 2)
     assert xm.try_extract_tv_triplet(url2) == ("123", 1, 2)
+    assert xm.try_extract_tv_triplet(url3) == ("123", 1, 2)
+
+
+def test_try_extract_movie_id(xm):
+    url1 = "http://host/movie/123/path"
+    url2 = "http://host/movie/user/pass/456.m3u8"
+    assert xm.try_extract_movie_id(url1) == "123"
+    assert xm.try_extract_movie_id(url2) == "456"
 
 
 def test_build_series_collections_series(xm):
