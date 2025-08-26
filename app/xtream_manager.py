@@ -115,14 +115,17 @@ def parse_m3u(text: str) -> List[M3UItem]:
 def _xtreams() -> List[Dict[str, Any]]:
     return load_json(XTREAMS_JSON, [])
 
-def _save_xtreams(items: List[Dict[str, Any]]):
-    """Persist xtream configs merging with existing ones.
+def _save_xtreams(items: List[Dict[str, Any]], overwrite: bool = False):
+    """Persist xtream configs.
 
-    Items are matched by their ``id``; when an item with the same id already
-    exists on disk, values from ``items`` override the stored ones. This allows
-    partial updates without having to load and rewrite the whole list
-    externally.
+    By default, items are merged with the existing list on disk using their
+    ``id`` as key. When ``overwrite`` is ``True`` the provided ``items`` list is
+    written directly without performing any merge.
     """
+    if overwrite:
+        save_json(XTREAMS_JSON, items)
+        return
+
     existing = {x.get("id"): x for x in load_json(XTREAMS_JSON, [])}
     for it in items:
         iid = it.get("id")
@@ -162,7 +165,7 @@ def admin_xtreams_add(payload: Dict[str, Any]):
 @router.delete("/admin/xtreams/{xt_id}")
 def admin_xtreams_delete(xt_id: str):
     items = [x for x in _xtreams() if x.get("id") != xt_id]
-    _save_xtreams(items)
+    _save_xtreams(items, overwrite=True)
     return {"ok": True}
 
 @router.post("/admin/xtreams/{xt_id}/update")
