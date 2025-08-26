@@ -95,7 +95,9 @@ async function loadLists(){
         <div class="row-main">
           <div><b>${it.name}</b></div>
           <div class="muted">${it.url}</div>
-          <div>Tipo: <b>${it.mode}</b> &nbsp; • &nbsp; Aggiorna ogni <input class="hrs" type="number" min="1" value="${it.every_hours}"/> ore</div>
+          <div>Tipo: <b>${it.mode}</b> &nbsp; • &nbsp; Aggiorna ogni
+            <input class="hrs" type="number" min="1" value="${it.every_hours}"/> ore
+          </div>
           <div class="muted">Ultimo refresh: ${it.last_refresh ? new Date(it.last_refresh*1000).toLocaleString() : "mai"}</div>
         </div>
         <div class="row-ops">
@@ -186,7 +188,12 @@ function buildServerUrl(x){
   return base + "/xtream/" + x.id;
 }
 function buildFullM3UUrl(x){
-  return buildServerUrl(x) + "/get.php?username=" + encodeURIComponent(x.username) + "&password=" + encodeURIComponent(x.password) + "&type=m3u&output=ts";
+  return (
+    buildServerUrl(x) +
+    "/get.php?username=" + encodeURIComponent(x.username) +
+    "&password=" + encodeURIComponent(x.password) +
+    "&type=m3u&output=ts"
+  );
 }
 
 // ---------------- Xtream: CRUD ----------------
