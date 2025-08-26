@@ -350,6 +350,19 @@ def build_series_collections(request: Request, items: Iterable[M3UItem]) -> Tupl
             "direct_source": make_direct_video(request, it.url)
         })
 
+    # ordina gli episodi per numero all'interno di ogni stagione
+    ep_re = re.compile(r"E(\d+)$", re.I)
+    for sm in series_map.values():
+        ordered: Dict[str, List[Dict[str, Any]]] = {}
+        for season in sorted(sm["episodes_by_season"], key=lambda s: int(s)):
+            eps = sm["episodes_by_season"][season]
+            eps_sorted = sorted(
+                eps,
+                key=lambda e: int(ep_re.search(e["title"]).group(1)) if ep_re.search(e["title"]) else e["title"],
+            )
+            ordered[season] = eps_sorted
+        sm["episodes_by_season"] = ordered
+
     return series_map, cat_map
 
 def build_live_streams(request: Request, items: Iterable[M3UItem]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
