@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 import urllib.parse
+import logging
 from typing import Dict, List, Optional
 
 import httpx
@@ -21,6 +22,10 @@ from .registry import pick_script_for
 from .adapter import run_resolver, ResolverError
 
 from app.xtream_manager import setup_xtream
+
+# configure logging at application level
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Config & bootstrap (UI + settings)
 # -----------------------------------------------------------------------------
@@ -46,15 +51,20 @@ def _read_json(path: str, default):
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
+        logger.exception("File not found when reading JSON from %s", path)
         return default
     except Exception:
+        logger.exception("Error reading JSON from %s", path)
         return default
 
 def _write_json(path: str, data) -> None:
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        logger.exception("Error writing JSON to %s", path)
 
 def _load_settings() -> Dict[str, str]:
     """Carica solo settings.json (file ufficiale)."""
