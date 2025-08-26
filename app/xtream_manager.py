@@ -261,6 +261,7 @@ def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[D
             "rating": "",
             "added": "",
             "category_id": cat_id,
+            "category_name": cat_name,
             "container_extension": "m3u8",
             "direct_source": make_direct_video(request, it.url)
         })
@@ -391,6 +392,7 @@ def build_live_streams(request: Request, items: Iterable[M3UItem]) -> Tuple[List
             "stream_icon": it.tvg_logo or "",
             "epg_channel_id": it.tvg_id or "",
             "category_id": cat_id,
+            "category_name": cat_name,
             "added": "",
             "custom_sid": "",
             "container_extension": "m3u8",
@@ -537,7 +539,7 @@ def xt_get_php(request: Request,
     for s in live_streams:
         name = s["name"]
         logo = s.get("stream_icon", "")
-        grp  = s.get("category_id", "")
+        grp  = s.get("category_name") or s.get("category_id", "")
         tvgid = s.get("epg_channel_id", "")
         url = s["direct_source"]
         lines.append(f'#EXTINF:-1 tvg-id="{tvgid}" tvg-logo="{logo}" group-title="{grp}",{name}')
@@ -546,14 +548,14 @@ def xt_get_php(request: Request,
     for s in vod_streams:
         name = s["name"]
         logo = s.get("stream_icon", "")
-        grp  = s.get("category_id", "")
+        grp  = s.get("category_name") or s.get("category_id", "")
         url = s["direct_source"]
         lines.append(f'#EXTINF:-1 tvg-logo="{logo}" group-title="{grp}",{name}')
         lines.append(url)
 
     for sid, sm in series_map.items():
         cover = sm["cover"]
-        grp   = sm["category_id"]
+        grp   = sm.get("category_name") or sm.get("category_id", "")
         for season, eps in sm["episodes_by_season"].items():
             for ep in eps:
                 title = f'{sm["name"]} {ep["title"]}'
