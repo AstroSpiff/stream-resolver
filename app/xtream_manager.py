@@ -559,7 +559,7 @@ def xt_get_php(request: Request,
                xt_id: str,
                username: Optional[str] = None,
                password: Optional[str] = None,
-               type: str = "m3u",
+               playlist_type: str = "m3u",
                output: str = "ts"):
     if not username or not password:
         raise HTTPException(401, "Unauthorized")
