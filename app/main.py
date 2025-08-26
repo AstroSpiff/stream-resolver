@@ -403,6 +403,8 @@ def admin_add_playlist(data: PlaylistCreate):
     return {"ok": True, "id": pid}
 
 class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
     every_hours: Optional[int] = None
     refresh: bool = False
 
@@ -412,6 +414,12 @@ async def admin_update_playlist(pid: str = Path(...), data: PlaylistUpdate = Bod
     it = _find_playlist(items, pid)
     if not it:
         raise HTTPException(status_code=404, detail="Playlist non trovata")
+
+    if data.name is not None:
+        it["name"] = data.name.strip()
+
+    if data.url is not None:
+        it["url"] = data.url.strip()
 
     if data.every_hours is not None:
         it["every_hours"] = max(1, int(data.every_hours))

@@ -154,6 +154,15 @@ def admin_xtreams_update(xt_id: str, payload: Dict[str, Any]):
             break
     if not found:
         raise HTTPException(404, "Not Found")
+    if "name" in payload:
+        found["name"] = payload.get("name")
+    if "username" in payload:
+        found["username"] = (payload.get("username") or "").strip()
+    if "password" in payload:
+        found["password"] = payload.get("password")
+    for key in ("live_list_ids", "movie_list_ids", "series_list_ids", "mixed_list_ids"):
+        if key in payload:
+            found[key] = payload.get(key) or []
     if "every_hours" in payload:
         found["every_hours"] = int(payload["every_hours"])
     if payload.get("refresh"):

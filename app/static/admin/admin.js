@@ -102,6 +102,7 @@ async function loadLists(){
         </div>
         <div class="row-ops">
           <button class="small" data-act="refresh">Aggiorna</button>
+          <button class="small" data-act="edit">Modifica</button>
           <button class="small" data-act="copy">Copia link</button>
           <button class="small danger" data-act="del">Elimina</button>
         </div>
@@ -109,6 +110,14 @@ async function loadLists(){
       row.querySelector('[data-act="refresh"]').onclick = async ()=>{
         const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
         await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, refresh: true });
+        await loadLists();
+        await populateXtreamSelects();
+      };
+      row.querySelector('[data-act="edit"]').onclick = async ()=>{
+        const name = prompt("Nuovo nome", it.name);
+        if(!name) return;
+        const url = prompt("Nuovo URL", it.url) || it.url;
+        await jpost(`/admin/playlists/${it.id}/update`, { name, url });
         await loadLists();
         await populateXtreamSelects();
       };
@@ -243,6 +252,7 @@ async function loadXtreams(){
         </div>
         <div class="row-ops">
           <button class="small" data-act="refresh">Aggiorna</button>
+          <button class="small" data-act="edit">Modifica</button>
           <button class="small" data-act="copy-server">Copia URL server</button>
           <button class="small" data-act="copy-full">Copia URL completa</button>
           <button class="small danger" data-act="del">Elimina</button>
@@ -251,6 +261,26 @@ async function loadXtreams(){
       row.querySelector('[data-act="refresh"]').onclick = async ()=>{
         const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
         await jpost(`/admin/xtreams/${x.id}/update`, { every_hours: hrs, refresh: true });
+        await loadXtreams();
+      };
+      row.querySelector('[data-act="edit"]').onclick = async ()=>{
+        const name = prompt("Nome", x.name);
+        if(!name) return;
+        const username = prompt("Username", x.username) || x.username;
+        const password = prompt("Password", x.password) || x.password;
+        const live = prompt("ID playlist Live (separate da virgola)", x.live_list_ids.join(",")) || x.live_list_ids.join(",");
+        const movie = prompt("ID playlist Film (separate da virgola)", x.movie_list_ids.join(",")) || x.movie_list_ids.join(",");
+        const series = prompt("ID playlist Serie (separate da virgola)", x.series_list_ids.join(",")) || x.series_list_ids.join(",");
+        const mixed = prompt("ID playlist Miste (separate da virgola)", x.mixed_list_ids.join(",")) || x.mixed_list_ids.join(",");
+        await jpost(`/admin/xtreams/${x.id}/update`, {
+          name,
+          username,
+          password,
+          live_list_ids: live.split(",").map(s=>s.trim()).filter(Boolean),
+          movie_list_ids: movie.split(",").map(s=>s.trim()).filter(Boolean),
+          series_list_ids: series.split(",").map(s=>s.trim()).filter(Boolean),
+          mixed_list_ids: mixed.split(",").map(s=>s.trim()).filter(Boolean)
+        });
         await loadXtreams();
       };
       row.querySelector('[data-act="del"]').onclick = async ()=>{
