@@ -618,6 +618,25 @@ def xt_player_api(request: Request,
 
     raise HTTPException(400, f"action non supportata: {action}")
 
+# ====== XTREAM: PANEL API (alias) ======
+@router.get("/xtream/{xt_id}/panel_api.php")
+def xt_panel_api(request: Request,
+                 xt_id: str,
+                 action: Optional[str] = None,
+                 username: Optional[str] = None,
+                 password: Optional[str] = None,
+                 vod_id: Optional[str] = None,
+                 series_id: Optional[str] = None):
+    return xt_player_api(
+        request,
+        xt_id,
+        action=action,
+        username=username,
+        password=password,
+        vod_id=vod_id,
+        series_id=series_id,
+    )
+
 # ====== XTREAM: GET.PHP (playlist M3U) ======
 @router.get("/xtream/{xt_id}/get.php")
 def xt_get_php(request: Request,
