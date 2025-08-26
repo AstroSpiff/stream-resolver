@@ -50,3 +50,4 @@ def test_build_series_collections_series(xm):
     assert "123" in series_map
     episodes = series_map["123"]["episodes_by_season"]["1"]
     assert episodes[0]["title"] == "S01E02"
+    assert episodes[0]["info"]["duration"] == "1"

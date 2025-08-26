@@ -42,9 +42,10 @@ def test_build_vod_streams_with_invalid_url(xm):
     item2 = _make_vod_item(xm, "Broken", "nota")
     streams, cat_map = xm.build_vod_streams(req, [item1, item2])
     assert len(streams) == 2
-    required_keys = {"num", "name", "stream_id", "stream_type", "stream_icon", "rating", "added", "category_id", "category_name", "container_extension", "direct_source"}
+    required_keys = {"num", "name", "stream_id", "stream_type", "stream_icon", "rating", "added", "duration", "category_id", "category_name", "container_extension", "direct_source"}
     for s in streams:
         assert required_keys <= s.keys()
+        assert int(s["duration"]) > 0
     s1, s2 = streams
     assert s1["stream_id"] == "123"
     assert s1["direct_source"] == f"http://testserver/video?u={xm.enc(item1.url)}"
@@ -81,6 +82,7 @@ def test_build_vod_info_and_not_found(xm):
     assert info["info"]["name"] == "Some Movie (2020)"
     assert info["info"]["movie_image"] == "poster.jpg"
     assert info["info"]["releasedate"] == "2020"
+    assert info["info"]["duration_secs"] == "1"
     with pytest.raises(xm.HTTPException) as exc:
         xm.build_vod_info(req, "999", [item])
     assert exc.value.status_code == 404

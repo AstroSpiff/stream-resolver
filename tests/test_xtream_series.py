@@ -55,3 +55,4 @@ def test_build_series_collections_with_series_urls(tmp_path):
     assert "2" in sm["episodes_by_season"]
     ep = sm["episodes_by_season"]["2"][0]
     assert ep["id"] == "123-S02E03"
+    assert ep["info"]["duration"] == "1"
