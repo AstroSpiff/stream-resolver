@@ -6,6 +6,7 @@ import json
 import time
 import uuid
 import urllib.parse
+from urllib.parse import quote
 from typing import Dict, List, Optional
 
 import httpx
@@ -123,7 +124,7 @@ class ResolveIn(BaseModel):
 def wrap_proxy(url: str, enabled: bool) -> str:
     if enabled and MEDIAFLOW_PROXY:
         base = MEDIAFLOW_PROXY.rstrip("/")
-        return f"{base}/fetch?target={url}"
+        return f"{base}/fetch?target={quote(url, safe='')}"
     return url
 
 def _handle_generic(url: str, kind: str, headers: Optional[Dict[str, str]], use_proxy: bool):
