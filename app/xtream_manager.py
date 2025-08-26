@@ -619,6 +619,11 @@ def xt_player_api(request: Request,
     raise HTTPException(400, f"action non supportata: {action}")
 
 # ====== XTREAM: PANEL API (alias) ======
+#
+# In Xtream Codes the ``panel_api.php`` endpoint is just an alias of
+# ``player_api.php``.  We mimic the same behaviour both for the explicit
+# ``/xtream/{xt_id}/panel_api.php`` path and, for convenience, through
+# root-level aliases defined below.
 @router.get("/xtream/{xt_id}/panel_api.php")
 def xt_panel_api(request: Request,
                  xt_id: str,
@@ -628,6 +633,58 @@ def xt_panel_api(request: Request,
                  vod_id: Optional[str] = None,
                  series_id: Optional[str] = None):
     return xt_player_api(
+        request,
+        xt_id,
+        action=action,
+        username=username,
+        password=password,
+        vod_id=vod_id,
+        series_id=series_id,
+    )
+
+# ====== ROOT ALIASES ======
+# ``/player_api.php`` and ``/panel_api.php`` are convenience aliases for
+# clients that expect the classic Xtream Codes layout.  When a single Xtream
+# configuration is present, its identifier is used automatically; otherwise
+# callers must provide ``xt_id`` as a query parameter.
+
+@router.get("/player_api.php")
+def player_api(request: Request,
+               action: Optional[str] = None,
+               username: Optional[str] = None,
+               password: Optional[str] = None,
+               xt_id: Optional[str] = None,
+               vod_id: Optional[str] = None,
+               series_id: Optional[str] = None):
+    xts = _xtreams()
+    if len(xts) == 1 and not xt_id:
+        xt_id = xts[0].get("id")
+    elif not xt_id:
+        raise HTTPException(400, "xt_id mancante")
+    return xt_player_api(
+        request,
+        xt_id,
+        action=action,
+        username=username,
+        password=password,
+        vod_id=vod_id,
+        series_id=series_id,
+    )
+
+@router.get("/panel_api.php")
+def panel_api(request: Request,
+              action: Optional[str] = None,
+              username: Optional[str] = None,
+              password: Optional[str] = None,
+              xt_id: Optional[str] = None,
+              vod_id: Optional[str] = None,
+              series_id: Optional[str] = None):
+    xts = _xtreams()
+    if len(xts) == 1 and not xt_id:
+        xt_id = xts[0].get("id")
+    elif not xt_id:
+        raise HTTPException(400, "xt_id mancante")
+    return xt_panel_api(
         request,
         xt_id,
         action=action,
