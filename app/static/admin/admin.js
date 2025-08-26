@@ -76,61 +76,111 @@ async function convertOnce(){
 // ---------------- Liste salvate ----------------
 async function loadLists(){
   const box = byId("lists");
-  box.innerHTML = "carico...";
+  box.textContent = "carico...";
   try{
     const { items } = await jget("/admin/playlists.json");
     _lists = items || [];
-    if(!items || !items.length){ 
-      box.innerHTML = "<p class='muted'>Nessuna lista salvata</p>"; 
+    if(!items || !items.length){
+      box.textContent = "";
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "Nessuna lista salvata";
+      box.appendChild(p);
       await populateXtreamSelects();
-      return; 
+      return;
     }
-    box.innerHTML = "";
+    box.textContent = "";
     for(const it of items){
       const row = document.createElement("div");
       row.className = "row";
 
-      const link = new URL(`./lists/${it.id}.m3u`, location.href).href;
+      const rowMain = document.createElement("div");
+      rowMain.className = "row-main";
+      row.appendChild(rowMain);
 
-      row.innerHTML = `
-        <div class="row-main">
-          <div><b>${it.name}</b></div>
-          <div class="muted">${it.url}</div>
-          <div class="muted">${link}</div>
-          <div>Tipo: <b>${it.mode}</b> &nbsp; • &nbsp; Aggiorna ogni
-            <input class="hrs" type="number" min="1" value="${it.every_hours}"/> ore
-          </div>
-          <div>Resolver: <input class="resolver" value="${it.resolver_url || ""}" placeholder="default"/></div>
-          <div class="muted">Ultimo refresh: ${it.last_refresh ? new Date(it.last_refresh*1000).toLocaleString() : "mai"}</div>
-        </div>
-        <div class="row-ops">
-          <button class="small" data-act="save">Aggiorna</button>
-          <button class="small" data-act="refresh">Refresh</button>
-          <button class="small" data-act="copy">Copia link</button>
-          <button class="small danger" data-act="del">Elimina</button>
-        </div>
-      `;
-      row.querySelector('[data-act="save"]').onclick = async ()=>{
-        const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
-        const resolver = row.querySelector(".resolver").value.trim();
+      const nameDiv = document.createElement("div");
+      const nameB = document.createElement("b");
+      nameB.textContent = it.name;
+      nameDiv.appendChild(nameB);
+      rowMain.appendChild(nameDiv);
+
+      const urlDiv = document.createElement("div");
+      urlDiv.className = "muted";
+      urlDiv.textContent = it.url;
+      rowMain.appendChild(urlDiv);
+
+      const link = new URL(`./lists/${it.id}.m3u`, location.href).href;
+      const linkDiv = document.createElement("div");
+      linkDiv.className = "muted";
+      linkDiv.textContent = link;
+      rowMain.appendChild(linkDiv);
+
+      const typeDiv = document.createElement("div");
+      typeDiv.append("Tipo: ");
+      const modeB = document.createElement("b");
+      modeB.textContent = it.mode;
+      typeDiv.appendChild(modeB);
+      typeDiv.append(" \u00A0•\u00A0 Aggiorna ogni ");
+      const hrsInput = document.createElement("input");
+      hrsInput.className = "hrs";
+      hrsInput.type = "number";
+      hrsInput.min = "1";
+      hrsInput.value = it.every_hours;
+      typeDiv.appendChild(hrsInput);
+      typeDiv.append(" ore");
+      rowMain.appendChild(typeDiv);
+
+      const resolverDiv = document.createElement("div");
+      resolverDiv.textContent = "Resolver: ";
+      const resolverInput = document.createElement("input");
+      resolverInput.className = "resolver";
+      resolverInput.value = it.resolver_url || "";
+      resolverInput.placeholder = "default";
+      resolverDiv.appendChild(resolverInput);
+      rowMain.appendChild(resolverDiv);
+
+      const lastDiv = document.createElement("div");
+      lastDiv.className = "muted";
+      lastDiv.textContent = `Ultimo refresh: ${it.last_refresh ? new Date(it.last_refresh*1000).toLocaleString() : "mai"}`;
+      rowMain.appendChild(lastDiv);
+
+      const opsDiv = document.createElement("div");
+      opsDiv.className = "row-ops";
+      const btn = (txt, act, extra)=>{
+        const b = document.createElement("button");
+        b.className = "small" + (extra ? " " + extra : "");
+        b.textContent = txt;
+        b.dataset.act = act;
+        return b;
+      };
+      const saveBtn = btn("Aggiorna", "save");
+      const refreshBtn = btn("Refresh", "refresh");
+      const copyBtn = btn("Copia link", "copy");
+      const delBtn = btn("Elimina", "del", "danger");
+      opsDiv.append(saveBtn, refreshBtn, copyBtn, delBtn);
+      row.appendChild(opsDiv);
+
+      saveBtn.onclick = async ()=>{
+        const hrs = parseInt(hrsInput.value,10)||12;
+        const resolver = resolverInput.value.trim();
         await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, resolver_url: resolver });
         await loadLists();
         await populateXtreamSelects();
       };
-      row.querySelector('[data-act="refresh"]').onclick = async ()=>{
-        const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
-        const resolver = row.querySelector(".resolver").value.trim();
+      refreshBtn.onclick = async ()=>{
+        const hrs = parseInt(hrsInput.value,10)||12;
+        const resolver = resolverInput.value.trim();
         await jpost(`/admin/playlists/${it.id}/update`, { every_hours: hrs, resolver_url: resolver, refresh: true });
         await loadLists();
         await populateXtreamSelects();
       };
-      row.querySelector('[data-act="del"]').onclick = async ()=>{
+      delBtn.onclick = async ()=>{
         if(!confirm("Eliminare questa lista?")) return;
         await jdel(`/admin/playlists/${it.id}`);
         await loadLists();
         await populateXtreamSelects();
       };
-      row.querySelector('[data-act="copy"]').onclick = async ()=>{
+      copyBtn.onclick = async ()=>{
         try{
           await navigator.clipboard.writeText(link);
           alert("Link copiato:\n" + link);
@@ -144,12 +194,17 @@ async function loadLists(){
           alert("Link copiato (fallback):\n" + link);
         }
       };
+
       box.appendChild(row);
     }
     await populateXtreamSelects();
   }catch(e){
     console.error(e);
-    box.innerHTML = "<p class='muted'>Errore nel caricare le liste</p>";
+    box.textContent = "";
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Errore nel caricare le liste";
+    box.appendChild(p);
   }
 }
 
@@ -271,11 +326,15 @@ function startEditXtream(x){
 async function loadXtreams(){
   const box = byId("xtreams");
   if(!box){ return; }
-  box.innerHTML = "carico...";
+  box.textContent = "carico...";
   try{
     const { items } = await jget("/admin/xtreams.json");
     if(!items || !items.length){
-      box.innerHTML = "<p class='muted'>Nessun xtream salvato</p>";
+      box.textContent = "";
+      const p = document.createElement("p");
+      p.className = "muted";
+      p.textContent = "Nessun xtream salvato";
+      box.appendChild(p);
       return;
     }
 
@@ -283,68 +342,136 @@ async function loadXtreams(){
     const listNameById = {};
     for(const l of _lists){ listNameById[l.id] = l.name; }
     const names = ids => (ids || []).map(id => listNameById[id] || id).join(", ");
-    const catHtml = (label, ids)=>`<div class="xt-cat"><b>${label}:</b> ${names(ids) || "<span class='muted'>Nessuna</span>"}</div>`;
+    const catNode = (label, ids) => {
+      const div = document.createElement("div");
+      div.className = "xt-cat";
+      const b = document.createElement("b");
+      b.textContent = label + ":";
+      div.appendChild(b);
+      div.appendChild(document.createTextNode(" "));
+      if(ids && ids.length){
+        div.appendChild(document.createTextNode(names(ids)));
+      }else{
+        const span = document.createElement("span");
+        span.className = "muted";
+        span.textContent = "Nessuna";
+        div.appendChild(span);
+      }
+      return div;
+    };
 
-    box.innerHTML = "";
+    box.textContent = "";
     for(const x of items){
       const row = document.createElement("div");
       row.className = "row";
       const serverUrl = buildServerUrl(x);
       const fullUrl = buildFullM3UUrl(x);
-      const details = `
-        <details class="xt-details">
-          <summary>Mostra dettagli</summary>
-          ${catHtml('Live', x.live_list_ids)}
-          ${catHtml('Film', x.movie_list_ids)}
-          ${catHtml('Serie', x.series_list_ids)}
-          ${catHtml('Miste', x.mixed_list_ids)}
-        </details>`;
-      row.innerHTML = `
-        <div class="row-main">
-          <div><b>${x.name}</b></div>
-          <div>Server: <code>${serverUrl}</code></div>
-          <div class="muted">Utente: <b>${x.username}</b> • Password: <b>${x.password}</b> • Aggiorna ogni <input class="hrs" type="number" min="1" value="${x.every_hours}"/> ore</div>
-          <div class="muted">Ultimo refresh: ${x.last_refresh ? new Date(x.last_refresh*1000).toLocaleString() : "mai"}</div>
-          ${details}
-        </div>
-        <div class="row-ops">
-          <button class="small" data-act="edit">Modifica</button>
-          <button class="small" data-act="refresh">Aggiorna</button>
-          <button class="small" data-act="copy-server">Copia URL server</button>
-          <button class="small" data-act="copy-full">Copia URL completa</button>
-          <button class="small danger" data-act="del">Elimina</button>
-        </div>
-      `;
-      row.querySelector('[data-act="edit"]').onclick = ()=>{ startEditXtream(x); };
-      row.querySelector('[data-act="refresh"]').onclick = async ()=>{
-        const hrs = parseInt(row.querySelector(".hrs").value,10)||12;
+
+      const rowMain = document.createElement("div");
+      rowMain.className = "row-main";
+      row.appendChild(rowMain);
+
+      const nameDiv = document.createElement("div");
+      const nameB = document.createElement("b");
+      nameB.textContent = x.name;
+      nameDiv.appendChild(nameB);
+      rowMain.appendChild(nameDiv);
+
+      const serverDiv = document.createElement("div");
+      serverDiv.append("Server: ");
+      const code = document.createElement("code");
+      code.textContent = serverUrl;
+      serverDiv.appendChild(code);
+      rowMain.appendChild(serverDiv);
+
+      const infoDiv = document.createElement("div");
+      infoDiv.className = "muted";
+      infoDiv.append("Utente: ");
+      const userB = document.createElement("b");
+      userB.textContent = x.username;
+      infoDiv.appendChild(userB);
+      infoDiv.append(" • Password: ");
+      const passB = document.createElement("b");
+      passB.textContent = x.password;
+      infoDiv.appendChild(passB);
+      infoDiv.append(" • Aggiorna ogni ");
+      const hrsInput = document.createElement("input");
+      hrsInput.className = "hrs";
+      hrsInput.type = "number";
+      hrsInput.min = "1";
+      hrsInput.value = x.every_hours;
+      infoDiv.appendChild(hrsInput);
+      infoDiv.append(" ore");
+      rowMain.appendChild(infoDiv);
+
+      const lastDiv = document.createElement("div");
+      lastDiv.className = "muted";
+      lastDiv.textContent = `Ultimo refresh: ${x.last_refresh ? new Date(x.last_refresh*1000).toLocaleString() : "mai"}`;
+      rowMain.appendChild(lastDiv);
+
+      const details = document.createElement("details");
+      details.className = "xt-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Mostra dettagli";
+      details.appendChild(summary);
+      details.appendChild(catNode("Live", x.live_list_ids));
+      details.appendChild(catNode("Film", x.movie_list_ids));
+      details.appendChild(catNode("Serie", x.series_list_ids));
+      details.appendChild(catNode("Miste", x.mixed_list_ids));
+      rowMain.appendChild(details);
+
+      const opsDiv = document.createElement("div");
+      opsDiv.className = "row-ops";
+      const btn = (txt, act, extra)=>{
+        const b = document.createElement("button");
+        b.className = "small" + (extra ? " " + extra : "");
+        b.textContent = txt;
+        b.dataset.act = act;
+        return b;
+      };
+      const editBtn = btn("Modifica", "edit");
+      const refreshBtn = btn("Aggiorna", "refresh");
+      const copyServerBtn = btn("Copia URL server", "copy-server");
+      const copyFullBtn = btn("Copia URL completa", "copy-full");
+      const delBtn = btn("Elimina", "del", "danger");
+      opsDiv.append(editBtn, refreshBtn, copyServerBtn, copyFullBtn, delBtn);
+      row.appendChild(opsDiv);
+
+      editBtn.onclick = ()=>{ startEditXtream(x); };
+      refreshBtn.onclick = async ()=>{
+        const hrs = parseInt(hrsInput.value,10)||12;
         await jpost(`/admin/xtreams/${x.id}/update`, { every_hours: hrs, refresh: true });
         await loadXtreams();
       };
-      row.querySelector('[data-act="del"]').onclick = async ()=>{
+      delBtn.onclick = async ()=>{
         if(!confirm("Eliminare questo xtream?")) return;
         await jdel(`/admin/xtreams/${x.id}`);
         await loadXtreams();
       };
-      row.querySelector('[data-act="copy-server"]').onclick = async ()=>{
+      copyServerBtn.onclick = async ()=>{
         const s = serverUrl;
         try{ await navigator.clipboard.writeText(s); alert("Copiato: " + s); }
         catch(e){
           const ta = document.createElement("textarea"); ta.value=s; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); alert("Copiato (fallback): " + s);
         }
       };
-      row.querySelector('[data-act="copy-full"]').onclick = async ()=>{
+      copyFullBtn.onclick = async ()=>{
         const s = fullUrl;
         try{ await navigator.clipboard.writeText(s); alert("Copiato: " + s); }
         catch(e){
           const ta = document.createElement("textarea"); ta.value=s; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); alert("Copiato (fallback): " + s);
         }
       };
+
       box.appendChild(row);
     }
   }catch(e){
     console.error(e);
-    box.innerHTML = "<p class='muted'>Errore nel caricare gli xtream</p>";
+    box.textContent = "";
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "Errore nel caricare gli xtream";
+    box.appendChild(p);
   }
 }
 
