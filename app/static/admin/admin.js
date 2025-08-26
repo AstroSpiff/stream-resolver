@@ -224,22 +224,38 @@ async function loadXtreams(){
   box.innerHTML = "carico...";
   try{
     const { items } = await jget("/admin/xtreams.json");
-    if(!items || !items.length){ 
-      box.innerHTML = "<p class='muted'>Nessun xtream salvato</p>"; 
-      return; 
+    if(!items || !items.length){
+      box.innerHTML = "<p class='muted'>Nessun xtream salvato</p>";
+      return;
     }
+
+    // costruisce mappa id -> nome per le playlist
+    const listNameById = {};
+    for(const l of _lists){ listNameById[l.id] = l.name; }
+    const names = ids => (ids || []).map(id => listNameById[id] || id).join(", ");
+    const catHtml = (label, ids)=>`<div class="xt-cat"><b>${label}:</b> ${names(ids) || "<span class='muted'>Nessuna</span>"}</div>`;
+
     box.innerHTML = "";
     for(const x of items){
       const row = document.createElement("div");
       row.className = "row";
       const serverUrl = buildServerUrl(x);
       const fullUrl = buildFullM3UUrl(x);
+      const details = `
+        <details class="xt-details">
+          <summary>Mostra dettagli</summary>
+          ${catHtml('Live', x.live_list_ids)}
+          ${catHtml('Film', x.movie_list_ids)}
+          ${catHtml('Serie', x.series_list_ids)}
+          ${catHtml('Miste', x.mixed_list_ids)}
+        </details>`;
       row.innerHTML = `
         <div class="row-main">
           <div><b>${x.name}</b></div>
           <div>Server: <code>${serverUrl}</code></div>
           <div class="muted">Utente: <b>${x.username}</b> • Password: <b>${x.password}</b> • Aggiorna ogni <input class="hrs" type="number" min="1" value="${x.every_hours}"/> ore</div>
           <div class="muted">Ultimo refresh: ${x.last_refresh ? new Date(x.last_refresh*1000).toLocaleString() : "mai"}</div>
+          ${details}
         </div>
         <div class="row-ops">
           <button class="small" data-act="refresh">Aggiorna</button>
