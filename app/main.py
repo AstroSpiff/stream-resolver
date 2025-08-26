@@ -379,6 +379,7 @@ class PlaylistCreate(BaseModel):
     url: str
     mode: str = "video"
     every_hours: int = 12
+    resolver_url: str = ""
 
 @APP.get("/admin/playlists.json")
 def admin_list_playlists():
@@ -396,6 +397,7 @@ def admin_add_playlist(data: PlaylistCreate):
         "url": data.url.strip(),
         "mode": data.mode,
         "every_hours": max(1, int(data.every_hours or 12)),
+        "resolver_url": _ensure_http(data.resolver_url) if data.resolver_url else "",
         "last_refresh": 0
     }
     items.append(it)
@@ -404,6 +406,7 @@ def admin_add_playlist(data: PlaylistCreate):
 
 class PlaylistUpdate(BaseModel):
     every_hours: Optional[int] = None
+    resolver_url: Optional[str] = None
     refresh: bool = False
 
 @APP.post("/admin/playlists/{pid}/update")
@@ -416,10 +419,16 @@ async def admin_update_playlist(pid: str = Path(...), data: PlaylistUpdate = Bod
     if data.every_hours is not None:
         it["every_hours"] = max(1, int(data.every_hours))
 
+    if data.resolver_url is not None:
+        it["resolver_url"] = _ensure_http(data.resolver_url) if data.resolver_url else ""
+
     if data.refresh:
         try:
             src = await fetch_text(it["url"])
-            out = convert_playlist_text(src, it["mode"], _load_settings())
+            settings = _load_settings()
+            if it.get("resolver_url"):
+                settings = {**settings, "stream_resolver_url": it["resolver_url"]}
+            out = convert_playlist_text(src, it["mode"], settings)
             out_path = os.path.join(PLAYLISTS_DIR, f"{pid}.m3u")
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(out)
