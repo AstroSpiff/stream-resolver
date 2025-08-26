@@ -265,7 +265,7 @@ function buildFullM3UUrl(x){
     buildServerUrl(x) +
     "/get.php?username=" + encodeURIComponent(x.username) +
     "&password=" + encodeURIComponent(x.password) +
-    "&type=m3u&output=ts"
+    "&playlist_type=m3u&output=ts"
   );
 }
 
