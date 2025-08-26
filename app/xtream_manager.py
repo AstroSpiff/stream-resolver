@@ -280,6 +280,28 @@ def make_direct_live(request: Request, original_url: str) -> str:
     base = stream_resolver_base(request)
     return f"{base}/tv?u={enc(original_url)}"
 
+# ====== DURATE ======
+def _extract_duration(attrs: Dict[str, str]) -> int:
+    """Return a positive duration in seconds from playlist attributes.
+
+    Several providers expose the duration using different attribute names; we
+    try a few common ones and fall back to ``1`` when the value is missing or
+    invalid.  Returning ``1`` avoids the ``-1`` placeholder that some clients
+    interpret as "live" content.
+    """
+
+    for key in ("tvg-duration", "tvg-duration-secs", "duration", "duration_secs"):
+        val = attrs.get(key) or ""
+        if not val:
+            continue
+        try:
+            secs = int(float(val))
+            if secs > 0:
+                return secs
+        except ValueError:
+            continue
+    return 1
+
 # ====== COSTRUZIONE STRUTTURE ======
 def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     out: List[Dict[str, Any]] = []
@@ -302,6 +324,7 @@ def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[D
             "stream_icon": stream_icon,
             "rating": "",
             "added": "",
+            "duration": str(_extract_duration(it.attrs)),
             "category_id": cat_id,
             "category_name": cat_name,
             "container_extension": "m3u8",
@@ -341,6 +364,8 @@ def build_vod_info(request: Request, vod_id: str, all_items: Iterable[M3UItem]) 
     title_clean = re.sub(r"\s+", " ", title_clean)
     final_name = f"{title_clean} ({year})" if year else title_clean
 
+    duration = _extract_duration(chosen.attrs)
+
     return {
         "info": {
             "name": final_name,
@@ -348,7 +373,7 @@ def build_vod_info(request: Request, vod_id: str, all_items: Iterable[M3UItem]) 
             "plot": "",
             "releasedate": year,
             "rating": "",
-            "duration_secs": ""
+            "duration_secs": str(duration)
         }
     }
 
@@ -388,7 +413,7 @@ def build_series_collections(request: Request, items: Iterable[M3UItem]) -> Tupl
             "info": {
                 "movie_image": cover,
                 "plot": "",
-                "duration": ""
+                "duration": str(_extract_duration(it.attrs))
             },
             "direct_source": make_direct_video(request, it.url)
         })
@@ -594,7 +619,8 @@ def xt_get_php(request: Request,
         logo = s.get("stream_icon", "")
         grp  = s.get("category_name") or s.get("category_id", "")
         url = s["direct_source"]
-        lines.append(f'#EXTINF:-1 tvg-logo="{logo}" group-title="{grp}",{name}')
+        dur = int(s.get("duration") or 0)
+        lines.append(f'#EXTINF:{dur} tvg-logo="{logo}" group-title="{grp}",{name}')
         lines.append(url)
 
     for sid, sm in series_map.items():
@@ -604,7 +630,8 @@ def xt_get_php(request: Request,
             for ep in eps:
                 title = f'{sm["name"]} {ep["title"]}'
                 url = ep["direct_source"]
-                lines.append(f'#EXTINF:-1 tvg-logo="{cover}" group-title="{grp}",{title}')
+                dur = int(ep.get("info", {}).get("duration") or 0)
+                lines.append(f'#EXTINF:{dur} tvg-logo="{cover}" group-title="{grp}",{title}')
                 lines.append(url)
 
     txt = "\n".join(lines) + "\n"
