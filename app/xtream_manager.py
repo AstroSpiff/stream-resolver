@@ -178,18 +178,20 @@ def _read_playlist(pl_id: str) -> List[M3UItem]:
 
 # ====== CLASSIFICAZIONE ======
 MOVIE_RE = re.compile(r"/movie/(\d+)", re.I)
-TV_RE    = re.compile(r"/tv/(\d+)/(?:season/)?(\d+)/(\d+)", re.I)
-TV_RE_SHORT = re.compile(r"/tv/(\d+)/(\d+)/(\d+)", re.I)
+TV_RE    = re.compile(r"/(?:tv|series)/(\d+)/(?:season/)?(\d+)/(\d+)", re.I)
+TV_RE_SHORT = re.compile(r"/(?:tv|series)/(\d+)/(\d+)/(\d+)", re.I)
 
 def try_extract_movie_id(url: str) -> Optional[str]:
     m = MOVIE_RE.search(url)
     return m.group(1) if m else None
 
 def try_extract_tv_triplet(url: str) -> Optional[Tuple[str, int, int]]:
-    m = TV_RE.search(url) or TV_RE_SHORT.search(url)
-    if not m: return None
-    sid, season, episode = m.group(1), int(m.group(2)), int(m.group(3))
-    return sid, season, episode
+    for rgx in (TV_RE, TV_RE_SHORT):
+        m = rgx.search(url)
+        if m:
+            sid, season, episode = m.group(1), int(m.group(2)), int(m.group(3))
+            return sid, season, episode
+    return None
 
 def guess_is_series(item: M3UItem) -> bool:
     if try_extract_tv_triplet(item.url): return True
