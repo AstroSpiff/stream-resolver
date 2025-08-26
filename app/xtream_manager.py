@@ -268,13 +268,26 @@ def build_vod_info(request: Request, vod_id: str, all_items: Iterable[M3UItem]) 
                 break
     if not chosen:
         raise HTTPException(404, "VOD non trovato")
+    title = chosen.title.strip()
     year = ""
-    m = re.search(r"\((\d{4})\)\s*$", chosen.title)
+    m = re.search(r"(19|20)\d{2}", title)
     if m:
-        year = m.group(1)
+        year = m.group(0)
+    else:
+        for key in ("tvg-year", "tvg_year", "year", "releasedate", "release-date"):
+            y = chosen.attrs.get(key, "").strip()
+            m2 = re.search(r"(19|20)\d{2}", y)
+            if m2:
+                year = m2.group(0)
+                break
+
+    title_clean = re.sub(r"\s*\([^()]*\)\s*", " ", title).strip()
+    title_clean = re.sub(r"\s+", " ", title_clean)
+    final_name = f"{title_clean} ({year})" if year else title_clean
+
     return {
         "info": {
-            "name": chosen.title,
+            "name": final_name,
             "movie_image": chosen.tvg_logo or "",
             "plot": "",
             "releasedate": year,
