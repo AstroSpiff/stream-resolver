@@ -380,6 +380,7 @@ def build_live_streams(request: Request, items: Iterable[M3UItem]) -> Tuple[List
             "category_id": cat_id,
             "added": "",
             "custom_sid": "",
+            "container_extension": "m3u8",
             "direct_source": make_direct_live(request, it.url)
         })
         num += 1
