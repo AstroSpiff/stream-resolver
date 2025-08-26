@@ -46,7 +46,7 @@ def test_xt_get_php_uses_durations(monkeypatch, tmp_path):
     vod_item = xtm.M3UItem(
         title="Movie One",
         url="http://example.com/movie/10/file",
-        attrs={"tvg-duration": "90"},
+        attrs={"tvg-duration": "01:30:00"},
         group="Film",
         tvg_id="",
         tvg_logo="",
@@ -56,7 +56,7 @@ def test_xt_get_php_uses_durations(monkeypatch, tmp_path):
     series_item = xtm.M3UItem(
         title="Show S01E02",
         url="http://example.com/series/20/season/1/2",
-        attrs={"tvg-duration": "40"},
+        attrs={"tvg-duration": "45:00"},
         group="Serie",
         tvg_id="",
         tvg_logo="",
@@ -92,6 +92,80 @@ def test_xt_get_php_uses_durations(monkeypatch, tmp_path):
     lines = body.strip().splitlines()
 
     assert "#EXTINF:-1" in lines[1]
-    assert "#EXTINF:90" in lines[3]
-    assert "#EXTINF:40" in lines[5]
+    assert "#EXTINF:5400" in lines[3]
+    assert "#EXTINF:2700" in lines[5]
+
+
+def test_xt_get_php_defaults_duration_when_invalid(monkeypatch, tmp_path):
+    os_env = {
+        "CONFIG_DIR": str(tmp_path),
+        "APP_DIR": str(tmp_path),
+    }
+    for k, v in os_env.items():
+        monkeypatch.setenv(k, v)
+
+    import app.xtream_manager as xtm
+    importlib.reload(xtm)
+
+    live_item = xtm.M3UItem(
+        title="Live One",
+        url="http://example.com/live/abcdefabcdef",
+        attrs={},
+        group="Live",
+        tvg_id="",
+        tvg_logo="",
+        raw="",
+    )
+
+    vod_item = xtm.M3UItem(
+        title="Movie One",
+        url="http://example.com/movie/10/file",
+        attrs={"tvg-duration": "n/a"},
+        group="Film",
+        tvg_id="",
+        tvg_logo="",
+        raw="",
+    )
+
+    series_item = xtm.M3UItem(
+        title="Show S01E02",
+        url="http://example.com/series/20/season/1/2",
+        attrs={"tvg-duration": "bad"},
+        group="Serie",
+        tvg_id="",
+        tvg_logo="",
+        raw="",
+    )
+
+    def fake_xtreams():
+        return [
+            {
+                "id": "1",
+                "username": "u",
+                "password": "p",
+                "live_list_ids": ["l"],
+                "movie_list_ids": ["v"],
+                "series_list_ids": ["s"],
+                "mixed_list_ids": [],
+            }
+        ]
+
+    def fake_read_playlist(pid):
+        return {
+            "l": [live_item],
+            "v": [vod_item],
+            "s": [series_item],
+        }.get(pid, [])
+
+    monkeypatch.setattr(xtm, "_xtreams", fake_xtreams)
+    monkeypatch.setattr(xtm, "_read_playlist", fake_read_playlist)
+
+    req = make_request()
+    resp = xtm.xt_get_php(req, "1", username="u", password="p")
+    body = resp.body.decode()
+    lines = body.strip().splitlines()
+
+    assert "#EXTINF:-1" in lines[1]
+    assert "#EXTINF:1" in lines[3]
+    assert "#EXTINF:1" in lines[5]
 

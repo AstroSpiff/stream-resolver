@@ -305,15 +305,36 @@ def _extract_duration(attrs: Dict[str, str]) -> int:
     """
 
     for key in ("tvg-duration", "tvg-duration-secs", "duration", "duration_secs"):
-        val = attrs.get(key) or ""
+        val = (attrs.get(key) or "").strip()
         if not val:
             continue
+        # First try plain numeric values (int or float)
         try:
             secs = int(float(val))
             if secs > 0:
                 return secs
         except ValueError:
-            continue
+            pass
+
+        # Then try HH:MM:SS or MM:SS formats
+        if ":" in val:
+            parts = val.split(":")
+            try:
+                nums = [int(p) for p in parts]
+            except ValueError:
+                nums = []
+            if len(nums) == 3:
+                h, m, s = nums
+            elif len(nums) == 2:
+                h = 0
+                m, s = nums
+            else:
+                h = m = s = -1
+            if h >= 0 and m >= 0 and s >= 0:
+                secs = h * 3600 + m * 60 + s
+                if secs > 0:
+                    return secs
+
     return 1
 
 # ====== COSTRUZIONE STRUTTURE ======
@@ -633,7 +654,12 @@ def xt_get_php(request: Request,
         logo = s.get("stream_icon", "")
         grp  = s.get("category_name") or s.get("category_id", "")
         url = s["direct_source"]
-        dur = int(s.get("duration") or 0)
+        try:
+            dur = int(float(s.get("duration") or 0))
+        except (TypeError, ValueError):
+            dur = 0
+        if dur <= 0:
+            dur = 1
         lines.append(f'#EXTINF:{dur} tvg-logo="{logo}" group-title="{grp}",{name}')
         lines.append(url)
 
@@ -644,7 +670,12 @@ def xt_get_php(request: Request,
             for ep in eps:
                 title = f'{sm["name"]} {ep["title"]}'
                 url = ep["direct_source"]
-                dur = int(ep.get("info", {}).get("duration") or 0)
+                try:
+                    dur = int(float(ep.get("info", {}).get("duration") or 0))
+                except (TypeError, ValueError):
+                    dur = 0
+                if dur <= 0:
+                    dur = 1
                 lines.append(f'#EXTINF:{dur} tvg-logo="{cover}" group-title="{grp}",{title}')
                 lines.append(url)
 
