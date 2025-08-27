@@ -87,7 +87,7 @@ def test_xt_player_api_uses_cache(monkeypatch, tmp_path):
     )
 
     cache_data = xtm.load_json(
-        os.path.join(tmp_path, "xtream", "1.json"), {}
+        os.path.join(tmp_path, "xtream_cache", "1.json"), {}
     )
     assert resp == cache_data["live_streams"]
 

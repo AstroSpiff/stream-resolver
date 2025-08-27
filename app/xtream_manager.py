@@ -25,7 +25,7 @@ SETTINGS_JSON  = os.path.join(CONFIG_DIR, "settings.json")
 PLAYLISTS_DIR  = os.path.join(CONFIG_DIR, "playlists")
 CATEGORY_IDS_JSON = os.path.join(CONFIG_DIR, "category_ids.json")
 # location where per-Xtream cache files are stored
-XTREAM_CACHE_DIR = os.path.join(CONFIG_DIR, "xtream")
+XTREAM_CACHE_DIR = os.path.join(CONFIG_DIR, "xtream_cache")
 
 os.makedirs(PLAYLISTS_DIR, exist_ok=True)
 
