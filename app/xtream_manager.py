@@ -555,6 +555,10 @@ def xt_player_api(request: Request,
     movie_items = items_for_xtream_selection(xt.get("movie_list_ids", []) + xt.get("mixed_list_ids", []))
     series_items= items_for_xtream_selection(xt.get("series_list_ids", []) + xt.get("mixed_list_ids", []))
 
+    available_channels = len(live_items)
+    available_movies = len(movie_items)
+    available_series = len(series_items)
+
     if action is None:
         return {
             "user_info": {
@@ -567,7 +571,10 @@ def xt_player_api(request: Request,
                 "https_port": "",
                 "server_protocol": "http",
                 "timezone": "UTC"
-            }
+            },
+            "available_channels": available_channels,
+            "available_movies": available_movies,
+            "available_series": available_series,
         }
 
     if action == "get_live_categories":
