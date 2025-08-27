@@ -239,6 +239,12 @@ def try_extract_movie_id(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 def try_extract_tv_triplet(url: str) -> Optional[Tuple[str, int, int]]:
+    parsed = urllib.parse.urlparse(url)
+    q = urllib.parse.parse_qs(parsed.query)
+    if "u" in q and q["u"]:
+        url = urllib.parse.unquote(q["u"][0])
+    else:
+        url = urllib.parse.unquote(url)
     for rgx in (TV_RE, TV_RE_SHORT):
         m = rgx.search(url)
         if m:
