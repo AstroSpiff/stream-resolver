@@ -56,3 +56,24 @@ def test_build_series_collections_with_series_urls(tmp_path):
     ep = sm["episodes_by_season"]["2"][0]
     assert ep["id"] == "123-S02E03"
     assert ep["info"]["duration"] == "1"
+
+
+def test_build_series_collections_with_wrapped_url(tmp_path):
+    xtm = import_xtm(tmp_path)
+    url = "http://example.com/video?u=https%3A%2F%2Fvixsrc.to%2Ftv%2F123%2Fseason%2F2%2F3"
+    item = xtm.M3UItem(
+        title="My Show S02E03",
+        url=url,
+        attrs={},
+        group="Serie",
+        tvg_id="",
+        tvg_logo="",
+        raw="",
+    )
+    req = make_request()
+    series_map, cat_map = xtm.build_series_collections(req, [item])
+    assert "123" in series_map
+    sm = series_map["123"]
+    assert "2" in sm["episodes_by_season"]
+    ep = sm["episodes_by_season"]["2"][0]
+    assert ep["id"] == "123-S02E03"
