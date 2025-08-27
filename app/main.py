@@ -194,22 +194,30 @@ def convert_playlist_text(src_text: str, mode: str, settings: Dict[str, str]) ->
     out: List[str] = []
     saw_header = False
     seen_urls: set[str] = set()
+    pending_extinf: str | None = None
     for line in lines:
         stripped = line.strip()
         if not saw_header and M3U_HEADER_RE.match(stripped):
             saw_header = True
+        if stripped.startswith("#EXTINF"):
+            if mode == "video":
+                line = re.sub(r'\s*group-title="[^"]*"', "", line)
+            pending_extinf = line
+            continue
         if stripped.startswith("#"):
             if mode == "video" and not stripped.startswith("#EXT"):
                 continue
-            if mode == "video" and stripped.startswith("#EXTINF"):
-                line = re.sub(r'\s*group-title="[^"]*"', "", line)
             out.append(line)
             continue
         if stripped.lower().startswith(("http://", "https://")):
             if stripped in seen_urls:
+                pending_extinf = None
                 continue
             seen_urls.add(stripped)
+            if pending_extinf is not None:
+                out.append(pending_extinf)
             out.append(_resolver_link_for(stripped, settings, mode))
+            pending_extinf = None
         elif stripped == "":
             out.append("")
         else:
