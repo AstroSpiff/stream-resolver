@@ -6,7 +6,7 @@ import json
 import zlib
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple, Iterable
 from collections import defaultdict
 import threading
@@ -24,6 +24,7 @@ XTREAMS_JSON   = os.path.join(CONFIG_DIR, "xtreams.json")
 SETTINGS_JSON  = os.path.join(CONFIG_DIR, "settings.json")
 PLAYLISTS_DIR  = os.path.join(CONFIG_DIR, "playlists")
 CATEGORY_IDS_JSON = os.path.join(CONFIG_DIR, "category_ids.json")
+XTREAM_CACHE_DIR = os.path.join(CONFIG_DIR, "xtream_cache")
 
 os.makedirs(PLAYLISTS_DIR, exist_ok=True)
 
@@ -202,6 +203,22 @@ def admin_xtreams_update(xt_id: str, payload: Dict[str, Any]):
         found["last_refresh"] = now_ts()
     _save_xtreams(items)
     return {"ok": True, "item": found}
+
+
+@router.post("/admin/xtreams/{xt_id}/refresh")
+def admin_xtreams_refresh(xt_id: str, request: Request):
+    items = _xtreams()
+    target = None
+    for x in items:
+        if x.get("id") == xt_id:
+            target = x
+            break
+    if not target:
+        raise HTTPException(404, "Not Found")
+    build_xtream_cache(request, target)
+    target["last_refresh"] = now_ts()
+    _save_xtreams(items, overwrite=True)
+    return {"ok": True, "item": target}
 
 # ====== CARICAMENTO PLAYLISTS SALVATE ======
 def _playlists_index() -> List[Dict[str, Any]]:
@@ -538,6 +555,41 @@ def items_for_xtream_selection(sel_ids: List[str]) -> List[M3UItem]:
         items.extend(_read_playlist(pid))
     return items
 
+
+def build_xtream_cache(request: Request, xt_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build and persist cache structures for a given Xtream config."""
+
+    live_items = items_for_xtream_selection(xt_config.get("live_list_ids", []))
+    movie_items = items_for_xtream_selection(
+        xt_config.get("movie_list_ids", []) + xt_config.get("mixed_list_ids", [])
+    )
+    series_items = items_for_xtream_selection(
+        xt_config.get("series_list_ids", []) + xt_config.get("mixed_list_ids", [])
+    )
+
+    live_streams, live_cats = build_live_streams(request, live_items)
+    vod_streams, vod_cats = build_vod_streams(request, movie_items)
+    series_map, series_cats = build_series_collections(request, series_items)
+
+    cache = {
+        "live_streams": live_streams,
+        "live_categories": live_cats,
+        "vod_streams": vod_streams,
+        "vod_categories": vod_cats,
+        "series_map": series_map,
+        "series_categories": series_cats,
+        "movie_items": [asdict(m) for m in movie_items],
+        "counts": {
+            "available_channels": len(live_items),
+            "available_movies": len(movie_items),
+            "available_series": len(series_items),
+        },
+    }
+
+    cache_file = os.path.join(XTREAM_CACHE_DIR, f"{xt_config.get('id')}.json")
+    save_json(cache_file, cache)
+    return cache
+
 # ====== XTREAM: PLAYER API ======
 @router.get("/xtream/{xt_id}/player_api.php")
 def xt_player_api(request: Request,
@@ -551,13 +603,35 @@ def xt_player_api(request: Request,
         raise HTTPException(401, "Unauthorized")
     xt = require_xtream(xt_id, username, password)
 
-    live_items  = items_for_xtream_selection(xt.get("live_list_ids", []))
-    movie_items = items_for_xtream_selection(xt.get("movie_list_ids", []) + xt.get("mixed_list_ids", []))
-    series_items= items_for_xtream_selection(xt.get("series_list_ids", []) + xt.get("mixed_list_ids", []))
+    cache_file = os.path.join(XTREAM_CACHE_DIR, f"{xt_id}.json")
+    cache_data: Optional[Dict[str, Any]] = None
 
-    available_channels = len(live_items)
-    available_movies = len(movie_items)
-    available_series = len(series_items)
+    every_hours = int(xt.get("every_hours", 12) or 12)
+    last_refresh = int(xt.get("last_refresh", 0) or 0)
+    expired = now_ts() - last_refresh > every_hours * 3600
+
+    if not expired:
+        cache_data = load_json(cache_file, None)
+
+    if cache_data is None:
+        cache_data = build_xtream_cache(request, xt)
+        xt["last_refresh"] = now_ts()
+        _save_xtreams([xt])
+
+    live_streams = cache_data.get("live_streams", [])
+    vod_streams = cache_data.get("vod_streams", [])
+    series_map = cache_data.get("series_map", {})
+    live_cat_map = cache_data.get("live_categories", {})
+    vod_cat_map = cache_data.get("vod_categories", {})
+    series_cat_map = cache_data.get("series_categories", {})
+    movie_items = [M3UItem(**m) for m in cache_data.get("movie_items", [])]
+    counts = cache_data.get("counts", {})
+
+    available_channels = counts.get("available_channels", len(live_streams))
+    available_movies = counts.get("available_movies", len(vod_streams))
+    available_series = counts.get("available_series", sum(
+        len(eps) for sm in series_map.values() for eps in sm.get("episodes_by_season", {}).values()
+    ))
 
     if action is None:
         return {
@@ -578,22 +652,24 @@ def xt_player_api(request: Request,
         }
 
     if action == "get_live_categories":
-        _, cat_map = build_live_streams(request, live_items)
-        cats = [{"category_id": cid, "category_name": name} for name, cid in sorted(cat_map.items(), key=lambda x: x[1])]
+        cats = [
+            {"category_id": cid, "category_name": name}
+            for name, cid in sorted(live_cat_map.items(), key=lambda x: x[1])
+        ]
         return cats
 
     if action == "get_live_streams":
-        streams, _ = build_live_streams(request, live_items)
-        return streams
+        return live_streams
 
     if action == "get_vod_categories":
-        _, cat_map = build_vod_streams(request, movie_items)
-        cats = [{"category_id": cid, "category_name": name} for name, cid in sorted(cat_map.items(), key=lambda x: x[1])]
+        cats = [
+            {"category_id": cid, "category_name": name}
+            for name, cid in sorted(vod_cat_map.items(), key=lambda x: x[1])
+        ]
         return cats
 
     if action == "get_vod_streams":
-        streams, _ = build_vod_streams(request, movie_items)
-        return streams
+        return vod_streams
 
     if action == "get_vod_info":
         if not vod_id:
@@ -601,12 +677,13 @@ def xt_player_api(request: Request,
         return build_vod_info(request, vod_id, movie_items)
 
     if action == "get_series_categories":
-        series_map, cat_map = build_series_collections(request, series_items)
-        cats = [{"category_id": cid, "category_name": name} for name, cid in sorted(cat_map.items(), key=lambda x: x[1])]
+        cats = [
+            {"category_id": cid, "category_name": name}
+            for name, cid in sorted(series_cat_map.items(), key=lambda x: x[1])
+        ]
         return cats
 
     if action == "get_series":
-        series_map, _ = build_series_collections(request, series_items)
         out = []
         for sid, s in series_map.items():
             out.append({
@@ -622,7 +699,6 @@ def xt_player_api(request: Request,
     if action == "get_series_info":
         if not series_id:
             raise HTTPException(400, "series_id mancante")
-        series_map, _ = build_series_collections(request, series_items)
         s = series_map.get(str(series_id))
         if not s:
             raise HTTPException(404, "Serie non trovata")
@@ -633,13 +709,9 @@ def xt_player_api(request: Request,
             "rating": s["rating"],
             "releaseDate": "",
             "stream_type": "series",
-            "series_id": s["series_id"]
+            "series_id": s["series_id"],
         }
-        return {
-            "info": info,
-            "episodes": s["episodes_by_season"],
-            "seasons": []
-        }
+        return {"info": info, "episodes": s["episodes_by_season"], "seasons": []}
 
     raise HTTPException(400, f"action non supportata: {action}")
 
