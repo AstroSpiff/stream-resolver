@@ -193,6 +193,7 @@ def convert_playlist_text(src_text: str, mode: str, settings: Dict[str, str]) ->
     lines = src_text.splitlines()
     out: List[str] = []
     saw_header = False
+    seen_urls: set[str] = set()
     for line in lines:
         if not saw_header and M3U_HEADER_RE.match(line.strip()):
             saw_header = True
@@ -201,6 +202,9 @@ def convert_playlist_text(src_text: str, mode: str, settings: Dict[str, str]) ->
             continue
         stripped = line.strip()
         if stripped.lower().startswith(("http://", "https://")):
+            if stripped in seen_urls:
+                continue
+            seen_urls.add(stripped)
             out.append(_resolver_link_for(stripped, settings, mode))
         elif stripped == "":
             out.append("")
