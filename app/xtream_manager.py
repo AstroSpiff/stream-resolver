@@ -235,6 +235,18 @@ TV_RE_SHORT = re.compile(
 )
 
 def try_extract_movie_id(url: str) -> Optional[str]:
+    parsed = urllib.parse.urlparse(url)
+    q = urllib.parse.parse_qs(parsed.query)
+    if "u" in q and q["u"]:
+        target_url = q["u"][0]
+        while True:
+            dec = urllib.parse.unquote(target_url)
+            if dec == target_url:
+                break
+            target_url = dec
+        m = MOVIE_RE.search(target_url)
+        if m:
+            return m.group(1)
     m = MOVIE_RE.search(url)
     return m.group(1) if m else None
 
