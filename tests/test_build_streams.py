@@ -40,12 +40,15 @@ def test_build_vod_streams_with_invalid_url(xm):
     req = DummyRequest()
     item1 = _make_vod_item(xm, "Movie One", "http://host/movie/123/path")
     item2 = _make_vod_item(xm, "Broken", "nota")
-    streams, cat_map = xm.build_vod_streams(req, [item1, item2])
+    item3 = _make_vod_item(xm, "Duplicate", "http://host/movie/123/other")
+    streams, cat_map = xm.build_vod_streams(req, [item1, item2, item3])
     assert len(streams) == 2
-    required_keys = {"num", "name", "stream_id", "stream_type", "stream_icon", "rating", "added", "duration", "category_id", "category_name", "container_extension", "direct_source"}
+    required_keys = {"num", "name", "stream_id", "stream_type", "stream_icon", "rating", "added", "container_extension", "direct_source"}
     for s in streams:
         assert required_keys <= s.keys()
-        assert int(s["duration"]) > 0
+        assert "duration" not in s
+        assert "category_name" not in s
+        assert "category_id" not in s
     s1, s2 = streams
     assert s1["stream_id"] == "123"
     assert s1["direct_source"] == f"http://testserver/video?u={xm.enc(item1.url)}"

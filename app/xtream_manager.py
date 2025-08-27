@@ -7,7 +7,7 @@ import zlib
 import time
 import urllib.parse
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Tuple, Iterable
+from typing import Any, Dict, List, Optional, Tuple, Iterable, Set
 from collections import defaultdict
 import threading
 
@@ -377,11 +377,15 @@ def _extract_duration(attrs: Dict[str, str]) -> int:
 def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     out: List[Dict[str, Any]] = []
     cat_map: Dict[str, str] = {}
+    seen_ids: Set[str] = set()
     num = 1
     for it in m3us:
         if not (guess_is_movie(it) or try_extract_movie_id(it.url)):
             continue
         mid = try_extract_movie_id(it.url) or str(crc32_num(it.url))
+        if str(mid) in seen_ids:
+            continue
+        seen_ids.add(str(mid))
         cat_name = normalize_group_for_type(it.group or "Film", "vod")
         cat_id = get_category_id(cat_name, 2000)
         cat_map[cat_name] = cat_id
@@ -395,9 +399,6 @@ def build_vod_streams(request: Request, m3us: Iterable[M3UItem]) -> Tuple[List[D
             "stream_icon": stream_icon,
             "rating": "",
             "added": "",
-            "duration": str(_extract_duration(it.attrs)),
-            "category_id": cat_id,
-            "category_name": cat_name,
             "container_extension": "m3u8",
             "direct_source": make_direct_video(request, it.url)
         })
@@ -808,6 +809,15 @@ def xt_get_php(request: Request,
     movie_items = items_for_xtream_selection(xt.get("movie_list_ids", []) + xt.get("mixed_list_ids", []))
     series_items= items_for_xtream_selection(xt.get("series_list_ids", []) + xt.get("mixed_list_ids", []))
 
+    movie_item_map: Dict[str, M3UItem] = {}
+    for it in movie_items:
+        if not (guess_is_movie(it) or try_extract_movie_id(it.url)):
+            continue
+        mid = try_extract_movie_id(it.url) or str(crc32_num(it.url))
+        if str(mid) in movie_item_map:
+            continue
+        movie_item_map[str(mid)] = it
+
     live_streams, _  = build_live_streams(request, live_items)
     vod_streams, _   = build_vod_streams(request, movie_items)
     series_map, _    = build_series_collections(request, series_items)
@@ -826,14 +836,15 @@ def xt_get_php(request: Request,
     for s in vod_streams:
         name = s["name"]
         logo = s.get("stream_icon", "")
-        grp  = s.get("category_name") or s.get("category_id", "")
+        it = movie_item_map.get(s.get("stream_id", ""))
+        grp = ""
+        dur = 1
+        if it:
+            grp = normalize_group_for_type(it.group or "Film", "vod")
+            dur = _extract_duration(it.attrs)
+            if dur <= 0:
+                dur = 1
         url = s["direct_source"]
-        try:
-            dur = int(float(s.get("duration") or 0))
-        except (TypeError, ValueError):
-            dur = 0
-        if dur <= 0:
-            dur = 1
         lines.append(f'#EXTINF:{dur} tvg-logo="{logo}" group-title="{grp}",{name}')
         lines.append(url)
 
