@@ -11,7 +11,7 @@ import uuid
 from typing import Dict, List, Optional
 
 import httpx
-from fastapi import Body, FastAPI, HTTPException, Path, Query
+from fastapi import Body, FastAPI, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                PlainTextResponse, RedirectResponse)
@@ -236,6 +236,14 @@ def _find_playlist(items: List[Dict], pid: str) -> Optional[Dict]:
 # FastAPI app
 # -----------------------------------------------------------------------------
 APP = FastAPI(title="Stream Resolver", version="1.2.0")
+
+@APP.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info("HTTP %s %s headers=%s",
+                request.method,
+                str(request.url),
+                dict(request.headers))
+    return await call_next(request)
 
 APP.add_middleware(
     CORSMiddleware,
