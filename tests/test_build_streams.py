@@ -98,3 +98,12 @@ def test_convert_playlist_text_adds_header_and_skips_invalid(xm):  # xm fixture 
     assert lines[2] == "http://resolver/tv?u=http%3A%2F%2Fexample.com%2Fstream"
     assert lines[3] == "notaurl"
     assert out.endswith("\n")
+
+
+def test_make_direct_functions_avoid_double_encoding(xm):
+    req = DummyRequest()
+    base = "http://testserver"
+    already_video = f"{base}/video?u=http%3A%2F%2Fexample.com%2Fmovie.m3u8"
+    already_live = f"{base}/tv?u=http%3A%2F%2Fexample.com%2Fstream.m3u8"
+    assert xm.make_direct_video(req, already_video) == already_video
+    assert xm.make_direct_live(req, already_live) == already_live

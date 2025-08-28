@@ -322,12 +322,38 @@ def normalize_group_for_type(group: str, typ: str) -> str:
     return g or "Generale"
 
 # ====== DIRECT SOURCE ======
+def _already_direct(url: str, base: str, endpoint: str) -> bool:
+    """Return True if *url* already targets our resolver.
+
+    We check that the host matches *base*, the path corresponds to the
+    expected *endpoint* (``/video`` or ``/tv``) and that a ``u`` query
+    parameter is present.  In that case the URL is returned unchanged to
+    avoid double-encoding.
+    """
+    try:
+        u = urllib.parse.urlparse(url)
+        b = urllib.parse.urlparse(base)
+        qs = urllib.parse.parse_qs(u.query)
+        return (
+            u.netloc == b.netloc
+            and u.path.rstrip("/") == f"/{endpoint}"
+            and "u" in qs
+        )
+    except Exception:
+        return False
+
+
 def make_direct_video(request: Request, original_url: str) -> str:
     base = stream_resolver_base(request)
+    if _already_direct(original_url, base, "video"):
+        return original_url
     return f"{base}/video?u={enc(original_url)}"
+
 
 def make_direct_live(request: Request, original_url: str) -> str:
     base = stream_resolver_base(request)
+    if _already_direct(original_url, base, "tv"):
+        return original_url
     return f"{base}/tv?u={enc(original_url)}"
 
 # ====== DURATE ======
