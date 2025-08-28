@@ -168,6 +168,11 @@ def admin_xtreams_add(payload: Dict[str, Any]):
 def admin_xtreams_delete(xt_id: str):
     items = [x for x in _xtreams() if x.get("id") != xt_id]
     _save_xtreams(items, overwrite=True)
+    cache_file = os.path.join(XTREAM_CACHE_DIR, f"{xt_id}.json")
+    try:
+        os.remove(cache_file)
+    except FileNotFoundError:
+        pass
     return {"ok": True}
 
 @router.post("/admin/xtreams/{xt_id}/update")
