@@ -1,0 +1,38 @@
+[
+  {
+    "id": "cd9069a1f0",
+    "name": "Serie vixsrc",
+    "url": "https://raw.githubusercontent.com/nzo66/TV/refs/heads/main/serie.m3u",
+    "mode": "series",
+    "every_hours": 2,
+    "last_refresh": 1757145352,
+    "resolver_url": "http://192.168.68.58:8000"
+  },
+  {
+    "id": "0d65c2a16b",
+    "name": "Film vixsrc",
+    "url": "https://raw.githubusercontent.com/nzo66/TV/refs/heads/main/film.m3u",
+    "mode": "film",
+    "every_hours": 2,
+    "last_refresh": 1757145361,
+    "resolver_url": "http://192.168.68.58:8000"
+  },
+  {
+    "id": "1e00d3e1fc",
+    "name": "TV Vavoo",
+    "url": "https://raw.githubusercontent.com/nzo66/TV/refs/heads/main/lista.m3u",
+    "mode": "live",
+    "every_hours": 2,
+    "resolver_url": "http://192.168.68.58:8000",
+    "last_refresh": 1757145364
+  },
+  {
+    "id": "0e8c5ee933",
+    "name": "Film VixSrc",
+    "url": "https://raw.githubusercontent.com/nzo66/TV/refs/heads/main/film.m3u",
+    "mode": "film",
+    "every_hours": 12,
+    "resolver_url": "",
+    "last_refresh": 0
+  }
+]

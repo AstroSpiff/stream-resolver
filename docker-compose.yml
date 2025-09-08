@@ -1,0 +1,69 @@
+services:
+  resolver:
+    container_name: py-resolver
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8791:8791"
+    # Bind mounts: usi i file della tua repo direttamente nel container
+    volumes:
+      # Codice app (incluso static/admin per la GUI)
+      - ./app:/app/app
+      # Config persistenti (settings.json, playlists.json, cache liste)
+      - ./config:/app/config
+      # Resolvers esterni (sola lettura)
+      - ./resolvers:/opt/external-resolvers:ro
+      # (opzionale) Sovrascrivi solo il domains.json usato dai resolvers
+      - ./resolvers/config/domains.json:/opt/external-resolvers/config/domains.json:ro
+    restart: unless-stopped
+    # Uvicorn lanciato come nel tuo compose
+    command: >
+      uvicorn app.main:APP
+      --host 0.0.0.0
+      --port 8791
+      --proxy-headers
+      --forwarded-allow-ips='*'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8791/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Per i resolvers Python esterni (opzionale):
+      RESOLVERS_DIR: /opt/external-resolvers
+      DOMAINS_JSON: /opt/external-resolvers/config/domains.json
+      PYTHONUNBUFFERED: "1"
+      TZ: "Europe/Rome"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://resolver:resolver@db:5432/streamresolver}
+    networks:
+      internal:
+        aliases:
+          - app
+
+  db:
+    image: postgres:16-alpine
+    container_name: pg-resolver
+    environment:
+      POSTGRES_DB: streamresolver
+      POSTGRES_USER: resolver
+      POSTGRES_PASSWORD: resolver
+      TZ: "Europe/Rome"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resolver -d streamresolver || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./config/db-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432" # esponi su 5433 per evitare conflitti locali
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge

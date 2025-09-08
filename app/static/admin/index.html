@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8"/>
+  <title>Stream Resolver – Admin</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/static/admin/style.css?v=20250906-1"/>
+  <script>
+    // Fallback immediato: rende funzionanti i tab anche prima del JS principale
+    window.showTab = function(id){
+      try{
+        var btns = document.querySelectorAll('.tab-btn');
+        var panels = document.querySelectorAll('.tab-panel');
+        for(var i=0;i<btns.length;i++){
+          var b = btns[i]; b.classList.toggle('active', b.getAttribute('data-target')===id);
+        }
+        for(var j=0;j<panels.length;j++){
+          var p = panels[j]; var on = (p.id===id); p.style.display = on? 'block':'none'; p.classList.toggle('active', on);
+        }
+      }catch(e){}
+    };
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Stream Resolver – Admin</h1>
+
+    <div class="tab-nav">
+      <button type="button" class="tab-btn active" data-target="tab-settings" onclick="window.showTab && showTab('tab-settings')">Settings</button>
+      <button type="button" class="tab-btn" data-target="tab-m3u" onclick="window.showTab && showTab('tab-m3u')">m3u manager</button>
+      <button type="button" class="tab-btn" data-target="tab-xtream" onclick="window.showTab && showTab('tab-xtream')">Xtream manager</button>
+      <button type="button" class="tab-btn" data-target="tab-db" onclick="window.showTab && showTab('tab-db')">TMDB</button>
+      <button type="button" class="tab-btn" data-target="tab-resolvers" onclick="window.showTab && showTab('tab-resolvers')">Resolvers and Proxy</button>
+    </div>
+
+    <div id="tab-settings" class="tab-panel active" style="display:block;">
+    <p class="muted">Configura il database, MediaFlow e l'URL pubblico del resolver. Queste impostazioni sono usate anche nelle regole.</p>
+    <section>
+      <h2>Database</h2>
+      <div class="grid" style="grid-template-columns: repeat(3, minmax(0,1fr)); align-items: start;">
+        <div>
+          <div class="field-title">Stato connessione</div>
+          <div id="dbStatusSimple" class="muted">Verifico…</div>
+        </div>
+        <div>
+          <div class="field-title">URL in uso</div>
+          <code id="dbUrlDisplay" class="break"></code>
+        </div>
+        <div>
+          <div class="field-title">Sorgente</div>
+          <div id="dbSource" class="muted"></div>
+        </div>
+      </div>
+      <div id="dbSourceNote" class="muted"></div>
+    </section>
+    <section>
+      <h2>Settings</h2>
+      <div class="stack">
+        <div>
+          <h3>Stream Resolver endpoints</h3>
+          <div id="sr_list" class="muted"></div>
+          <div class="grid">
+            <label>Nome
+              <input id="sr_name" placeholder="es. locale"/>
+            </label>
+            <label>URL (host:porta o https://...)
+              <input id="sr_url" placeholder="192.168.0.10:8791 oppure https://resolver.example" pattern="(https?://.+)|((\[[0-9A-Fa-f:]+\]:\d{1,5})|(([A-Za-z0-9.-]+|\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}))" title="Inserisci host:porta (anche [IPv6]:porta) oppure un URL che inizi con http:// o https://"/>
+            </label>
+          </div>
+          <button id="btnAddSR" type="button">Aggiungi endpoint</button>
+        </div>
+        <div>
+          <h3>MediaFlow proxies</h3>
+          <div id="mf_list" class="muted"></div>
+          <div class="grid">
+            <label>Nome
+              <input id="mf_name" placeholder="es. principale"/>
+            </label>
+            <label>URL
+              <input id="mf_url" placeholder="https://my-mediaflow.example.org" pattern="https?://.+" title="Inserisci un URL valido http(s), es. https://host[:porta]"/>
+            </label>
+            <label>api_password
+              <input type="password" id="mf_pwd" placeholder="********"/>
+            </label>
+          </div>
+          <button id="btnAddMF" type="button">Aggiungi MediaFlow</button>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <span id="saveStatus" class="muted"></span>
+      </div>
+    </section>
+    </div>
+
+    <div id="tab-m3u" class="tab-panel" style="display:none;">
+    <p class="muted">Gestisci le tue playlist M3U: conversione una tantum e liste salvate con aggiornamento automatico.</p>
+    <section>
+      <h2>Importa Playlist</h2>
+      <div class="grid">
+        <label>Nome lista
+          <input id="pl_name" placeholder="Film VixSrc"/>
+        </label>
+        <label>URL lista originale
+          <input id="pl_url" placeholder="https://.../lista.m3u" pattern="https?://.+" title="Inserisci un URL valido http(s)"/>
+        </label>
+        <label>Tipo contenuto
+          <select id="pl_mode">
+            <option value="live">Live</option>
+            <option value="film">Film</option>
+            <option value="series">Serie</option>
+            <option value="mixed">Misto</option>
+          </select>
+        </label>
+        <label>Aggiorna ogni (ore)
+          <input id="pl_every" type="number" min="1" value="12"/>
+        </label>
+      </div>
+      <button id="btnAdd">Importa</button>
+    </section>
+
+    <section>
+      <h2>Liste importate</h2>
+      <div id="lists"></div>
+    </section>
+    <!-- Sezione converti rimossa: import only -->
+    </div>
+
+    <!-- ===== Nuova sezione: Gestione Xtream ===== -->
+    <div id="tab-xtream" class="tab-panel" style="display:none;">
+    <p class="muted">Crea pacchetti compatibili Xtream (player_api.php, get.php, ecc.) a partire dalle tue liste.</p>
+    <section>
+      <h2>Gestione Xtream <span id="xt_editing_hint" class="muted"></span></h2>
+      <div class="grid">
+        <label>Nome Xtream
+          <input id="xt_name" placeholder="Pacchetto TiviMate"/>
+        </label>
+        <label>Username
+          <input id="xt_user" placeholder="myuser"/>
+        </label>
+        <label>Password
+          <input id="xt_pass" type="password" placeholder="********"/>
+        </label>
+        <label>Aggiorna ogni (ore)
+          <input id="xt_every" type="number" min="1" value="12"/>
+        </label>
+        <label>Endpoint resolver
+          <select id="xt_resolver"></select>
+        </label>
+        <label><span class="label-cap">Liste LIVE<span class="muted"> – multi-selezione</span></span>
+          <select id="xt_live" multiple></select>
+        </label>
+        <label><span class="label-cap">Liste FILM<span class="muted"> – multi-selezione</span></span>
+          <select id="xt_movies" multiple></select>
+        </label>
+        <label><span class="label-cap">Liste SERIE<span class="muted"> – multi-selezione</span></span>
+          <select id="xt_series" multiple></select>
+        </label>
+        <label><span class="label-cap">Liste MISTE<span class="muted"> – multi-selezione</span></span>
+          <select id="xt_mixed" multiple></select>
+        </label>
+      </div>
+      <details id="xt_adv" class="advanced">
+        <summary>Configurazione avanzata</summary>
+        <h3>Campi export Xtream</h3>
+        <div class="muted small">Seleziona i campi informativi da includere nelle risposte Xtream. I campi obbligatori restano sempre presenti.</div>
+        <div class="grid" style="margin:6px 0 10px;">
+          <div>
+            <button type="button" id="xpreset_safe" class="small">TiviMate Safe</button>
+            <button type="button" id="xpreset_full" class="small">Full TMDB</button>
+            <button type="button" id="xpreset_min" class="small">Minimal</button>
+            <button type="button" id="xpreset_clear" class="small secondary">Pulisci selezione</button>
+          </div>
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(4, minmax(0,1fr)); align-items: start;">
+          <div class="form-group">
+            <div class="field-title">Live</div>
+            <div class="cklist">
+              <label class="muted"><input type="checkbox" id="xlf_stream_icon"> Logo (stream_icon)</label>
+              <label class="muted"><input type="checkbox" id="xlf_epg_channel_id"> EPG channel id</label>
+              <label class="muted"><input type="checkbox" id="xlf_category_name"> Nome categoria</label>
+              <label class="muted"><input type="checkbox" id="xlf_category_id"> category_id</label>
+              <label class="muted"><input type="checkbox" id="xlf_stream_type"> stream_type</label>
+              <label class="muted"><input type="checkbox" id="xlf_rating"> rating</label>
+              <label class="muted"><input type="checkbox" id="xlf_rating5"> rating_5based</label>
+              <label class="muted"><input type="checkbox" id="xlf_added"> added</label>
+              <label class="muted"><input type="checkbox" id="xlf_tv_archive"> tv_archive</label>
+              <label class="muted"><input type="checkbox" id="xlf_tv_archive_duration"> tv_archive_duration</label>
+              <label class="muted"><input type="checkbox" id="xlf_direct_source"> direct_source</label>
+              <label class="muted"><input type="checkbox" id="xlf_custom_sid"> custom_sid</label>
+              <div class="muted small">Inclusi sempre: name, stream_id, num, container_extension</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="field-title">Film</div>
+            <div class="cklist">
+              <div class="muted small">Obbligatori [root]</div>
+              <label class="required"><input type="checkbox" checked disabled> stream_id</label>
+              <label class="required"><input type="checkbox" checked disabled> name</label>
+              <label class="required"><input type="checkbox" checked disabled> stream_type</label>
+              <label class="required"><input type="checkbox" checked disabled> category_id</label>
+              <label class="required"><input type="checkbox" checked disabled> category_name</label>
+              <label class="required"><input type="checkbox" checked disabled> container_extension</label>
+              <label class="required"><input type="checkbox" checked disabled> direct_source</label>
+              <hr class="section-sep"/>
+              <div class="muted small">Aggiuntive [root]</div>
+              <label class="muted"><input type="checkbox" id="xmf_stream_icon"> stream_icon</label>
+              <label class="muted"><input type="checkbox" id="xmf_added"> added</label>
+              <label class="muted"><input type="checkbox" id="xmf_category_ids"> category_ids</label>
+              <label class="muted"><input type="checkbox" id="xmf_num"> num</label>
+              <hr class="section-sep"/>
+              <div class="muted small">Informazioni aggiuntive [info]</div>
+              <label class="muted"><input type="checkbox" id="xmf_tmdb_id"> tmdb_id</label>
+              <label class="muted"><input type="checkbox" id="xmf_imdb_id"> imdb_id</label>
+              <label class="muted"><input type="checkbox" id="xmf_year"> year</label>
+              <label class="muted"><input type="checkbox" id="xmf_releasedate"> releasedate</label>
+              <label class="muted"><input type="checkbox" id="xmf_movie_image"> movie_image</label>
+              <label class="muted"><input type="checkbox" id="xmf_backdrop_path"> backdrop_path</label>
+              <label class="muted"><input type="checkbox" id="xmf_plot"> plot</label>
+              <label class="muted"><input type="checkbox" id="xmf_duration"> duration</label>
+              <label class="muted"><input type="checkbox" id="xmf_duration_secs"> duration_secs</label>
+              <label class="muted"><input type="checkbox" id="xmf_genre"> genre</label>
+              <label class="muted"><input type="checkbox" id="xmf_rating"> rating</label>
+              <label class="muted"><input type="checkbox" id="xmf_director"> director</label>
+              <label class="muted"><input type="checkbox" id="xmf_cast"> cast</label>
+              <label class="muted"><input type="checkbox" id="xmf_country"> country</label>
+              <label class="muted"><input type="checkbox" id="xmf_production_countries"> production_countries</label>
+              <label class="muted"><input type="checkbox" id="xmf_youtube_trailer"> youtube_trailer</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="field-title">Serie</div>
+            <div class="cklist">
+              <div class="muted small">Obbligatori [root]</div>
+              <label class="required"><input type="checkbox" checked disabled> series_id</label>
+              <label class="required"><input type="checkbox" checked disabled> name</label>
+              <label class="required"><input type="checkbox" checked disabled> stream_type</label>
+              <label class="required"><input type="checkbox" checked disabled> category_id</label>
+              <label class="required"><input type="checkbox" checked disabled> category_name</label>
+              <hr class="section-sep"/>
+              <div class="muted small">Aggiuntive [root]</div>
+              <label class="muted"><input type="checkbox" id="xsf_cover"> cover</label>
+              <label class="muted"><input type="checkbox" id="xsf_cover_big"> cover_big</label>
+              <label class="muted"><input type="checkbox" id="xsf_category_ids"> category_ids</label>
+              <label class="muted"><input type="checkbox" id="xsf_last_modified"> last_modified</label>
+              <label class="muted"><input type="checkbox" id="xsf_num"> num</label>
+              <hr class="section-sep"/>
+              <div class="muted small">Aggiuntive [info]</div>
+              <label class="muted"><input type="checkbox" id="xsf_tmdb_id"> tmdb_id</label>
+              <label class="muted"><input type="checkbox" id="xsf_imdb_id"> imdb_id</label>
+              <label class="muted"><input type="checkbox" id="xsf_releaseDate"> releaseDate</label>
+              <label class="muted"><input type="checkbox" id="xsf_backdrop_path"> backdrop_path</label>
+              <label class="muted"><input type="checkbox" id="xsf_plot"> plot</label>
+              <label class="muted"><input type="checkbox" id="xsf_genre"> genre</label>
+              <label class="muted"><input type="checkbox" id="xsf_rating"> rating</label>
+              <label class="muted"><input type="checkbox" id="xsf_director"> director</label>
+              <label class="muted"><input type="checkbox" id="xsf_cast"> cast</label>
+              <label class="muted"><input type="checkbox" id="xsf_origin_country"> origin_country</label>
+              <label class="muted"><input type="checkbox" id="xsf_youtube_trailer"> youtube_trailer</label>
+              <label class="muted"><input type="checkbox" id="xsf_network"> network</label>
+              <label class="muted"><input type="checkbox" id="xsf_status"> status</label>
+            </div>
+          </div>
+          <div>
+            <div class="form-group">
+              <div class="field-title">Stagioni</div>
+              <div class="cklist">
+                <div class="muted small">Obbligatorie [info]</div>
+                <label class="required"><input type="checkbox" checked disabled> season_number</label>
+                <label class="required"><input type="checkbox" checked disabled> episode_count</label>
+                <hr class="section-sep"/>
+                <div class="muted small">Aggiuntive [info]</div>
+                <label class="muted"><input type="checkbox" id="xss_name"> name</label>
+                <label class="muted"><input type="checkbox" id="xss_overview"> overview</label>
+                <label class="muted"><input type="checkbox" id="xss_cover"> cover</label>
+                <label class="muted"><input type="checkbox" id="xss_poster_path"> poster_path</label>
+                <label class="muted"><input type="checkbox" id="xss_air_date"> air_date</label>
+                <label class="muted"><input type="checkbox" id="xss_id"> id</label>
+                <label class="muted"><input type="checkbox" id="xss_backdrop_path"> backdrop_path</label>
+                <label class="muted"><input type="checkbox" id="xss_vote_average"> vote_average</label>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="field-title">Episodi</div>
+              <div class="cklist">
+                <div class="muted small">Obbligatorio [root]</div>
+                <label class="required"><input type="checkbox" checked disabled> id</label>
+                <label class="required"><input type="checkbox" checked disabled> title</label>
+                <label class="required"><input type="checkbox" checked disabled> season</label>
+                <label class="required"><input type="checkbox" checked disabled> episode_num</label>
+                <label class="required"><input type="checkbox" checked disabled> container_extension</label>
+                <label class="required"><input type="checkbox" checked disabled> direct_source</label>
+                <hr class="section-sep"/>
+                <div class="muted small">Aggiuntive [root]</div>
+                <label class="muted"><input type="checkbox" id="xef_tmdb_id"> tmdb_id</label>
+                <label class="muted"><input type="checkbox" id="xef_imdb_id"> imdb_id</label>
+                <label class="muted"><input type="checkbox" id="xef_releaseDate"> releaseDate</label>
+                <label class="muted"><input type="checkbox" id="xef_backdrop_path"> backdrop_path</label>
+                <label class="muted"><input type="checkbox" id="xef_plot"> plot</label>
+                <label class="muted"><input type="checkbox" id="xef_duration"> duration</label>
+                <label class="muted"><input type="checkbox" id="xef_duration_secs"> duration_secs</label>
+                <label class="muted"><input type="checkbox" id="xef_rating"> rating</label>
+                <label class="muted"><input type="checkbox" id="xef_added"> added</label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+      <button id="btnSaveXtream">Crea Xtream</button>
+      <button id="btnCancelXtream" class="secondary small" style="display:none;">Annulla</button>
+    </section>
+
+    <section>
+      <h2>Xtream salvati</h2>
+      <div id="xtreams"></div>
+    </section>
+    <!-- ===== fine aggiunte Xtream ===== -->
+    </div>
+
+    <!-- ===== Sezione: Resolvers (policy) ===== -->
+    <div id="tab-resolvers" class="tab-panel" style="display:none;">
+    <p class="muted">Definisci come risolvere i link per dominio, in 3 step. Puoi usare resolver personalizzati o instradare verso MediaFlow.</p>
+    <section>
+      <h2>Resolvers</h2>
+      <p class="muted">Configura la risoluzione link per dominio in 3 step guidati.</p>
+
+      <!-- Step 1: Configurazione link -->
+      <h3>1° Step – Configurazione link</h3>
+      <div class="grid">
+        <label>URL di esempio (opzionale)
+          <input id="rule_url" placeholder="Incolla un link per analizzarlo"/>
+        </label>
+        <label>Decodifica base64
+          <button id="btnDecode" type="button">Decodifica</button>
+        </label>
+      </div>
+      <div id="decode_out" class="muted" style="margin-bottom:8px;"></div>
+      <div class="grid">
+        <label>Match dominio / parola chiave (regex)
+          <input id="pol_match" placeholder="es. (vavoo\\.to|daddylive)"/>
+        </label>
+        <input type="hidden" id="pol_match_type" value="regex"/>
+        <label>Tipologia
+          <select id="pol_kind">
+            <option value="video">Video</option>
+            <option value="tv">TV</option>
+          </select>
+        </label>
+        <label>Trattamento link
+          <select id="pol_flow">
+            <option value="direct">Link diretto</option>
+            <option value="internal">Resolver</option>
+            <option value="mediaflow">Mediaflow</option>
+            <option value="direct_remote_mf">Diretto – Mediaflow da remoto</option>
+          </select>
+        </label>
+      </div>
+      <div id="flow_desc" class="muted"></div>
+
+      <!-- Step 2: Resolver -->
+      <fieldset id="step_resolver" style="margin-top:14px;">
+        <legend>2° Step – Resolver</legend>
+        <div class="grid">
+          <label>Scegli un resolver
+            <select id="rz_list"></select>
+          </label>
+          <label>Step successivo
+            <select id="pol_next_after_resolver" onchange="updateFlowUI && updateFlowUI()">
+              <option value="return">Restituisci link</option>
+              <option value="mediaflow">Mediaflow</option>
+              <option value="mediaflow_remote">Mediaflow da remoto</option>
+            </select>
+          </label>
+        </div>
+        <details>
+          <summary>Carica file resolver (.py)</summary>
+          <div class="grid">
+            <div id="rz_drop" style="border:2px dashed #ccc; border-radius:8px; padding:16px; text-align:center; color:#666;">Trascina qui un file .py oppure <input type="file" id="rz_file" accept=".py" style="display:inline-block"/></div>
+            <div>
+              <button id="btnUploadResolver">Carica</button>
+              <span class="muted" id="rz_status"></span>
+            </div>
+          </div>
+        </details>
+      </fieldset>
+
+      <!-- Step 3: Mediaflow -->
+      <fieldset id="step_mediaflow" style="margin-top:14px;">
+        <legend>3° Step – Mediaflow-proxy</legend>
+        <div class="grid">
+          <label>MediaFlow proxy
+            <select id="mf_preset"></select>
+          </label>
+          <label>Endpoint primo livello
+            <select id="mf_endpoint_main">
+              <option value="proxy">proxy/</option>
+              <option value="extractor_video">extractor/video</option>
+            </select>
+          </label>
+          <label id="mf_proxy_type_wrap">Sottotipo (proxy)
+            <select id="mf_proxy_type">
+              <option value="hls">hls/</option>
+              <option value="dash">dash/</option>
+              <option value="stream">stream/</option>
+              <option value="mpd">mpd/</option>
+            </select>
+          </label>
+          <label id="mf_proxy_sub_wrap">Path finale
+            <select id="mf_proxy_sub">
+              <option value="manifest.m3u8">manifest.m3u8</option>
+              <option value="segment">segment</option>
+            </select>
+          </label>
+          <label id="mf_extractor_kind_wrap">Tipologia link
+            <select id="mf_extractor_kind">
+              <option value="video">Video</option>
+              <option value="tv">TV</option>
+            </select>
+          </label>
+          <label id="mf_extractor_host_wrap">Host extractor
+            <input id="pol_mf_host" placeholder="es. VixCloud"/>
+          </label>
+          <label id="mf_extractor_redirect_wrap">redirect_stream
+            <select id="pol_mf_redirect">
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+        </div>
+        <details>
+          <summary>Avanzate</summary>
+          <div class="grid">
+            <label>h_referer
+              <input id="hdr_referer" placeholder="https://..."/>
+            </label>
+            <label>h_origin
+              <input id="hdr_origin" placeholder="https://..."/>
+            </label>
+            <label>h_user-agent
+              <input id="hdr_useragent" placeholder="Mozilla/5.0 ..."/>
+            </label>
+            <label>force_playlist_proxy
+              <select id="opt_force_playlist_proxy">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </label>
+            <label>key_id (ClearKey)
+              <input id="ck_kid" placeholder="uuid o hex"/>
+            </label>
+            <label>key (ClearKey)
+              <input id="ck_key" placeholder="hex"/>
+            </label>
+          </div>
+        </details>
+      </fieldset>
+
+      <div style="margin-top:8px;">
+        <button id="btnSavePolicy">Salva/aggiungi regola</button>
+        <input type="hidden" id="pol_id" value=""/>
+        <input type="hidden" id="pol_internal" value=""/>
+        <input type="hidden" id="pol_proxy" value="false"/>
+        <input type="hidden" id="pol_priority" value="100"/>
+        <input type="hidden" id="pol_enabled" value="true"/>
+      </div>
+      <h3>Regole configurate</h3>
+      <div id="policies"></div>
+      <div><button id="btnSaveOrder">Salva ordine</button></div>
+      <h3>Esempi</h3>
+      <div class="grid">
+        <button id="btnExampleVavoo" type="button">Aggiungi regola esempio: Vavoo (TV)</button>
+        <button id="btnExampleVix" type="button">Aggiungi regola esempio: VixSrc (Video)</button>
+      </div>
+      <h3>Test</h3>
+      <div class="grid">
+        <label>URL da testare
+          <input id="ptest_url" placeholder="https://..."/>
+        </label>
+        <label>Tipologia
+          <select id="ptest_kind">
+            <option value="tv">TV</option>
+            <option value="video">Video</option>
+          </select>
+        </label>
+        <label>Esegui risoluzione
+          <select id="ptest_exec">
+            <option value="false">false (solo match)</option>
+            <option value="true">true</option>
+          </select>
+        </label>
+      </div>
+      <button id="btnTestPolicy">Esegui Test</button>
+      <pre id="ptest_out" style="white-space:pre-wrap; background:#f6f6f6; border:1px solid #eee; padding:8px; border-radius:6px;"></pre>
+    </section>
+    <!-- ===== fine Resolvers ===== -->
+    </div>
+
+    <!-- ===== Sezione: TMDB ===== -->
+    <div id="tab-db" class="tab-panel" style="display:none;">
+    <p class="muted">Configura l'integrazione TMDB: seleziona i campi e avvia l'aggiornamento metadati.</p>
+    <section>
+      <h2>TMDB</h2>
+      <div class="grid tmdb-header-grid">
+        <label>API key
+          <input id="cfg_tmdb_key" placeholder="TMDB API key"/>
+        </label>
+        <label>Lingua
+          <input id="cfg_tmdb_lang" placeholder="it-IT"/>
+        </label>
+      </div>
+      <hr class="section-sep"/>
+      <div class="field-title">Estrazione metadati</div>
+      <div class="btn-row tmdb-preset-row" style="display:flex; gap:8px; align-items:center; flex-wrap:nowrap; overflow:auto;">
+        <button type="button" id="tmdb_preset_nfo_full" class="small badge-nfo">NFO completo</button>
+        <button type="button" id="tmdb_preset_nfo_min" class="small badge-nfo">NFO minimal</button>
+        <button type="button" id="tmdb_preset_xt_full" class="small badge-xt">Xtream completo</button>
+        <button type="button" id="tmdb_preset_xt_min" class="small badge-xt">Xtream minimal</button>
+        <button type="button" id="tmdb_preset_clear" class="small secondary">Pulisci selezione</button>
+      </div>
+      <div class="grid tmdb-fields-grid" style="grid-template-columns: repeat(3, minmax(0,1fr)); align-items: start;">
+        <div class="form-group">
+          <div class="field-title">Campi Film (TMDB)</div>
+          <div class="cklist">
+            <label class="muted"><input type="checkbox" id="tmf_name"> Nome</label>
+            <label class="muted"><input type="checkbox" id="tmf_original_title"> Titolo originale</label>
+            <label class="muted"><input type="checkbox" id="tmf_overview"> Overview</label>
+            <label class="muted"><input type="checkbox" id="tmf_poster"> Poster</label>
+            <label class="muted"><input type="checkbox" id="tmf_backdrop"> Backdrop</label>
+            <label class="muted"><input type="checkbox" id="tmf_logo"> Logo</label>
+            <label class="muted"><input type="checkbox" id="tmf_rating"> Rating</label>
+            <label class="muted"><input type="checkbox" id="tmf_year"> Anno</label>
+            <label class="muted"><input type="checkbox" id="tmf_release_date"> Data uscita</label>
+            <label class="muted"><input type="checkbox" id="tmf_duration"> Durata</label>
+            <label class="muted"><input type="checkbox" id="tmf_imdb"> IMDb ID</label>
+            <label class="muted"><input type="checkbox" id="tmf_genres"> Generi</label>
+            <label class="muted"><input type="checkbox" id="tmf_production_countries"> Paesi di produzione</label>
+            <label class="muted"><input type="checkbox" id="tmf_cast"> Cast</label>
+            <label class="muted"><input type="checkbox" id="tmf_director"> Regia</label>
+            <label class="muted"><input type="checkbox" id="tmf_writers"> Sceneggiatori</label>
+            <label class="muted"><input type="checkbox" id="tmf_tagline"> Tagline</label>
+            <label class="muted"><input type="checkbox" id="tmf_collection"> Collezione</label>
+            <label class="muted"><input type="checkbox" id="tmf_youtube_trailer"> Trailer YouTube</label>
+            <label class="muted"><input type="checkbox" id="tmf_production_companies"> Case di produzione</label>
+            <label class="muted"><input type="checkbox" id="tmf_certification"> Certificazione età</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="field-title">Campi Serie (TMDB)</div>
+          <div class="cklist">
+            <label class="muted"><input type="checkbox" id="ms_name"> Nome</label>
+            <label class="muted"><input type="checkbox" id="ms_original_name"> Nome originale</label>
+            <label class="muted"><input type="checkbox" id="ms_overview"> Overview</label>
+            <label class="muted"><input type="checkbox" id="ms_poster"> Poster</label>
+            <label class="muted"><input type="checkbox" id="ms_backdrop"> Backdrop</label>
+            <label class="muted"><input type="checkbox" id="ms_logo"> Logo</label>
+            <label class="muted"><input type="checkbox" id="ms_rating"> Rating</label>
+            <label class="muted"><input type="checkbox" id="ms_first_air_date"> Prima messa in onda</label>
+            <label class="muted"><input type="checkbox" id="ms_year"> Anno</label>
+            <label class="muted"><input type="checkbox" id="ms_duration"> Durata episodio</label>
+            <label class="muted"><input type="checkbox" id="ms_imdb"> IMDb ID</label>
+            <label class="muted"><input type="checkbox" id="ms_genres"> Generi</label>
+            <label class="muted"><input type="checkbox" id="ms_cast"> Cast</label>
+            <label class="muted"><input type="checkbox" id="ms_created_by"> Creatori</label>
+            <label class="muted"><input type="checkbox" id="ms_networks"> Networks</label>
+            <label class="muted"><input type="checkbox" id="ms_status"> Status</label>
+            <label class="muted"><input type="checkbox" id="ms_tagline"> Tagline</label>
+            <label class="muted"><input type="checkbox" id="ms_youtube_trailer"> Trailer YouTube</label>
+            <label class="muted"><input type="checkbox" id="ms_seasons"> Stagioni (poster)</label>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="form-group">
+            <div class="field-title">Campi Stagione (TMDB)</div>
+            <div class="cklist">
+              <label class="muted"><input type="checkbox" id="tms_name"> Nome</label>
+              <label class="muted"><input type="checkbox" id="tms_season_number"> Numero stagione</label>
+              <label class="muted"><input type="checkbox" id="tms_first_air_date"> Data prima messa in onda</label>
+              <label class="muted"><input type="checkbox" id="tms_episode_count"> Conteggio episodi</label>
+              <label class="muted"><input type="checkbox" id="tms_overview"> Overview</label>
+              <label class="muted"><input type="checkbox" id="tms_poster"> Poster season</label>
+              <label class="muted"><input type="checkbox" id="tms_backdrop"> Backdrop season</label>
+              <label class="muted"><input type="checkbox" id="tms_tmdb"> ID TMDb della season</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="field-title">Campi Episodio (TMDB)</div>
+            <div class="cklist">
+              <label class="muted"><input type="checkbox" id="tme_name"> Nome</label>
+              <label class="muted"><input type="checkbox" id="tme_overview"> Overview</label>
+              <label class="muted"><input type="checkbox" id="tme_air_date"> Data messa in onda</label>
+              <label class="muted"><input type="checkbox" id="tme_still"> Immagine (still)</label>
+              <label class="muted"><input type="checkbox" id="tme_duration"> Durata episodio</label>
+              <label class="muted"><input type="checkbox" id="tme_rating"> Rating episodio</label>
+              <label class="muted"><input type="checkbox" id="tme_guests"> Guest stars</label>
+              <label class="muted"><input type="checkbox" id="tme_crew"> Crew</label>
+              <label class="muted"><input type="checkbox" id="tme_imdb"> IMDb ID</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tmdb-actions sticky-actions" style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin:12px 0 0;">
+        <div>
+          <button id="btnSaveCfg" type="button">Salva configurazione</button>
+          <span id="cfgStatus" class="muted"></span>
+        </div>
+        <div style="display:flex; gap:8px; margin-left:auto;">
+          <button id="btnTmdbStop" type="button" class="danger" style="visibility:hidden;">Stop</button>
+          <button id="btnTmdbUpdate" type="button">Aggiorna metadati</button>
+          <button id="btnTmdbMissing" type="button" class="secondary">Recupera metadati mancanti</button>
+        </div>
+      </div>
+      <div class="tmdb-status" style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; margin:6px 0 12px;">
+        <div id="tmdbProgressWrap" class="progress">
+          <div id="tmdbProgressBar" class="bar"></div>
+        </div>
+        <div id="tmdbStatusNum" class="muted" style="text-align:right; min-height:18px;"></div>
+      </div>
+    </section>
+    </div>
+  </div>
+
+  <script src="/static/admin/admin.js?v=20250906-1"></script>
+</body>
+</html>

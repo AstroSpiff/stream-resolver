@@ -1,0 +1,21 @@
+[
+  {
+    "id": "xt_48fc5e23",
+    "name": "Prova 2",
+    "username": "roy",
+    "password": "roy",
+    "live_list_ids": [
+      "1e00d3e1fc"
+    ],
+    "movie_list_ids": [
+      "0d65c2a16b"
+    ],
+    "series_list_ids": [
+      "cd9069a1f0"
+    ],
+    "mixed_list_ids": [],
+    "every_hours": 2,
+    "last_refresh": 1757146502,
+    "resolver_url": "http://192.168.68.58:8000"
+  }
+]

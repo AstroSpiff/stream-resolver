@@ -1,0 +1,124 @@
+:root { --fg:#111; --muted:#666; --bg:#fafafa; --border:#ddd; --accent:#0a7; --danger:#b33; }
+*{ box-sizing:border-box; }
+body{ margin:0; font:16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--fg); background:var(--bg); }
+.wrap{ max-width:980px; margin:40px auto; background:#fff; border:1px solid var(--border); border-radius:10px; padding:24px; }
+h1{ margin-top:0; }
+section{ margin:26px 0 36px; }
+.grid{ display:grid; grid-template-columns:repeat(2, minmax(260px, 1fr)); gap:12px; margin-bottom:12px; }
+/* Stacking helper for vertical sections */
+.stack{ display: flex; flex-direction: column; gap: 12px; }
+label{ display:flex; flex-direction:column; gap:6px; font-weight:600; }
+/* Mantieni titolo e nota su una riga dentro alle label */
+.label-cap{ display:inline-flex; align-items:baseline; gap:6px; }
+input, select{ border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:15px; }
+select[multiple]{ min-height:160px; }
+/* Riduci altezza dei multi-select in Gestione Xtream */
+#xt_live, #xt_movies, #xt_series, #xt_mixed { min-height: 80px; }
+button{ background:var(--accent); border:0; color:#fff; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:700; }
+button.small{ padding:6px 10px; }
+button.danger{ background:var(--danger); }
+button.secondary{ background:#eee !important; color:#333 !important; border:1px solid var(--border) !important; }
+button.secondary:hover{ background:#e7e7e7 !important; }
+.muted{ color:var(--muted); font-size:14px; }
+.row{ display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--border); gap:10px; }
+.row:last-child{ border-bottom:0; }
+.row-ops{ display:flex; gap:8px; }
+.hrs{ width:80px; margin-left:8px; }
+code{ background:#f6f6f6; border:1px solid var(--border); padding:2px 6px; border-radius:4px; }
+.xt-details{ margin-top:6px; }
+.xt-details summary{ cursor:pointer; color:var(--accent); font-size:14px; }
+.xt-details .xt-cat{ margin-left:16px; font-size:14px; margin-top:4px; }
+.xt-status{ margin-top:6px; }
+.badge{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; border:1px solid transparent; }
+.status-pronta .badge, .badge.pronta{ background:#e8f8ed; color:#1e7e34; border-color:#c7efd1; }
+.status-scaduta .badge, .badge.scaduta{ background:#fff3cd; color:#856404; border-color:#ffeeba; }
+.status-in-costruzione .badge, .badge.in-costruzione{ background:#e7f1ff; color:#0b5ed7; border-color:#cfe2ff; }
+
+/* Tabs */
+.tab-nav{ display:flex; gap:8px; border-bottom:1px solid var(--border); margin:6px 0 16px; flex-wrap:wrap; }
+.tab-btn{ background:#f6f6f6; color:#333; border:1px solid var(--border); padding:8px 12px; border-radius:8px 8px 0 0; cursor:pointer; }
+.tab-btn.active{ background:#fff; border-bottom-color:#fff; font-weight:700; }
+.tab-panel{ display:none; }
+.tab-panel.active{ display:block; }
+@media (max-width: 720px){
+  .grid{ grid-template-columns: 1fr; }
+  .row{ flex-direction:column; align-items:flex-start; }
+}
+
+/* Inline edit helpers */
+.line{ display:flex; align-items:center; gap:4px; }
+.inline-editor{ display:inline-flex; align-items:center; gap:4px; }
+.break{ overflow-wrap:anywhere; word-break:break-word; }
+.row-main{ display:flex; flex-direction:column; gap:6px; }
+.inline-editor input{ padding:6px 8px; font-size:14px; border-radius:6px; border:1px solid var(--border); }
+button.icon{ background:transparent !important; color:#999 !important; border:none !important; padding:2px 6px !important; cursor:pointer; font-weight:600; border-radius:6px; display:inline-block; opacity:0; pointer-events:none; vertical-align:middle; line-height:1; transition: opacity .15s ease-in-out; }
+button.icon:hover{ color:#666 !important; }
+button.tiny{ padding:3px 6px !important; font-size:12px; border:1px solid var(--border) !important; color:#333 !important; background:#eee !important; border-radius:6px; font-weight:600; }
+button.tiny.btn-save{ background:#d9d9d9 !important; border-color:#d0d0d0 !important; color:#222 !important; }
+button.tiny.btn-save:hover{ background:#cfcfcf !important; }
+button.tiny.btn-cancel{ background:#efefef !important; border-color:#e3e3e3 !important; color:#333 !important; }
+button.tiny.btn-cancel:hover{ background:#e7e7e7 !important; }
+.inline-editor > button{ margin-left:0; }
+
+/* Mostra matita solo su hover/focus del contenitore riga */
+.line:hover > .icon, .line:focus-within > .icon { opacity:1; pointer-events:auto; }
+
+/* Accessibilità e touch: su dispositivi senza hover, mantieni visibile */
+@media (hover: none) {
+  button.icon { display:inline-block; }
+}
+
+/* Checklist TMDB: una voce per riga (verticale), checkbox a sinistra */
+.cklist{ display:flex; flex-direction:column; gap:6px; }
+.cklist label.muted{ display:flex; flex-direction:row; align-items:center; gap:6px; font-weight:400; }
+.cklist label.required{ display:flex; flex-direction:row; align-items:center; gap:6px; font-weight:400; color:#999; }
+.cklist input[disabled]{ filter: grayscale(100%); opacity: 0.8; cursor: not-allowed; }
+.form-group{ display:flex; flex-direction:column; gap:6px; }
+.field-title{ font-weight:600; }
+.progress{
+  width:100%;
+  max-width:520px;
+  height:8px;
+  background:#e6f4ea;
+  border-radius:6px;
+  overflow:hidden;
+}
+.progress .bar{
+  height:100%;
+  width:0%;
+  background:#2ecc71;
+  transition:width .3s ease;
+}
+.tmdb-header-grid{ margin-bottom:24px; }
+.tmdb-preset-row{ margin:24px 0; }
+.tmdb-fields-grid{ margin-top:24px; }
+.section-sep{ border:0; border-top:1px solid var(--border); margin:8px 0 20px; }
+.sticky-actions{
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  padding: 10px 0 8px;
+  border-top: 1px solid #eee;
+  z-index: 5;
+}
+.btn-row .badge-nfo,
+.btn-row .badge-xt{ position: relative; display:inline-flex; align-items:center; }
+.btn-row .badge-nfo::before,
+.btn-row .badge-xt::before{ content:"NFO"; }
+.btn-row .badge-xt::before{ content:"XT"; }
+.btn-row .badge-nfo::before,
+.btn-row .badge-xt::before{
+  position:static; display:inline-flex; align-items:center; justify-content:center;
+  padding:6px; /* padding uniforme su tutti i lati */
+  font-size:12px; line-height:1; font-weight:700; letter-spacing:.2px;
+  /* testo: verde del bottone, un po' più scuro */
+  color: color-mix(in srgb, var(--accent) 80%, #000 20%);
+  /* sfondo: bianco 80% opaco */
+  background: rgba(255,255,255,0.8);
+  border-radius:4px; /* arrotondamento a 4px */
+  margin-right:6px; /* distanzia la scritta del bottone senza sovrapporre */
+  pointer-events:none;
+}
+
+/* Bottoni preset: padding uniforme per mantenere uguale la distanza dal bordo sinistro */
+.btn-row .small{ padding:6px !important; }
