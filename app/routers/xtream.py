@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 import urllib.parse
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+import logging
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from urllib.parse import quote, urlparse
 
 from app import config
 from app.services.xtream import (
@@ -27,8 +30,12 @@ from app.services.xtream import (
     xmltv_from_cache,
     build_vod_info,
 )
+from app.services import policies as pol
+from app.logutil import redact_url
+import httpx
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.api_route("/xtream/{xt_id}", methods=["GET", "HEAD"])
@@ -142,7 +149,7 @@ async def xt_player_api(
                 "tv_archive": 0,
                 "tv_archive_duration": 0,
                 "direct_source": s.get("direct_source"),
-                "container_extension": "ts",
+                "container_extension": "m3u8",
             }
             if 'category_name' in sel_live:
                 row['category_name'] = s.get('category_name')
@@ -197,7 +204,7 @@ async def xt_player_api(
                 "https_port": port,
                 "server_protocol": proto,
                 "timestamp_now": now,
-                "time_now": "",
+                "time_now": datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S"),
             },
             "available_channels": available_channels,
             "available_movies": available_movies,
@@ -237,7 +244,7 @@ async def xt_player_api(
                     "category_id": str(s.get("category_id", "")),
                     "stream_icon": s.get("stream_icon", ""),
                     "epg_channel_id": s.get("epg_channel_id", ""),
-                    "container_extension": "ts",
+                    "container_extension": "m3u8",
                     "stream_status": 1,
                 }
                 if 'category_name' in sel_live:
@@ -300,7 +307,7 @@ async def xt_player_api(
         if not vod_id:
             raise HTTPException(400, "vod_id mancante")
         base_url = stream_resolver_base(request)
-        out = build_vod_info(base_url, vod_id, movie_items)
+        out = build_vod_info(base_url, vod_id, movie_items, xt)
         # Applica export selezionati (Film) con overlay TMDB
         try:
             sel = set((xt.get('export_movie_fields') or []))
@@ -342,16 +349,8 @@ async def xt_player_api(
                                 if ('poster' in sel or 'movie_image' in sel) and (row.poster_path or '').strip():
                                     info['movie_image'] = _tmdb_image_url(row.poster_path)
                                     info['cover_big'] = info['movie_image']
-                                if 'backdrop' in sel:
-                                    bks = []
-                                    if row.images and isinstance(row.images, dict):
-                                        for fp in (row.images.get('backdrops') or []):
-                                            if fp:
-                                                bks.append(_tmdb_image_url(fp))
-                                    elif row.backdrop_path:
-                                        bks.append(_tmdb_image_url(row.backdrop_path))
-                                    if bks:
-                                        info['backdrop_path'] = bks
+                                if 'backdrop' in sel and row.backdrop_path:
+                                    info['backdrop_path'] = [_tmdb_image_url(row.backdrop_path)]
                                 if 'rating' in sel and row.rating is not None:
                                     info['rating'] = float(row.rating)
                                 if 'year' in sel:
@@ -377,20 +376,12 @@ async def xt_player_api(
                                 if 'imdb_id' in sel and row.imdb_id:
                                     info['imdb_id'] = row.imdb_id
                                 if 'genres' in sel and row.genres:
-                                    try:
-                                        info['genre'] = ", ".join(row.genres)
-                                    except Exception:
-                                        pass
-                                if ('countries' in sel or 'country' in sel) and row.countries:
-                                    try:
-                                        info['country'] = ", ".join(row.countries)
-                                    except Exception:
-                                        pass
+                                    # DB stores genres as CSV string
+                                    info['genre'] = row.genres
+                                if ('countries' in sel or 'country' in sel) and row.production_countries:
+                                    info['country'] = row.production_countries
                                 if 'production_countries' in sel and row.production_countries:
-                                    try:
-                                        info['production_countries'] = ", ".join(row.production_countries)
-                                    except Exception:
-                                        pass
+                                    info['production_countries'] = row.production_countries
                                 if 'cast' in sel and row.cast:
                                     info['cast'] = row.cast
                                 if 'director' in sel and row.director:
@@ -494,17 +485,11 @@ async def xt_player_api(
                                 if 'imdb_id' in sel and row.imdb_id:
                                     row_out['imdb_id'] = row.imdb_id
                                 if 'origin_country' in sel and row.origin_country:
-                                    try:
-                                        row_out['origin_country'] = ", ".join(row.origin_country)
-                                    except Exception:
-                                        pass
+                                    row_out['origin_country'] = row.origin_country
                                 if 'youtube_trailer' in sel and row.youtube_trailer:
                                     row_out['youtube_trailer'] = f"https://www.youtube.com/watch?v={row.youtube_trailer}"
                                 if 'network' in sel and row.networks:
-                                    try:
-                                        row_out['network'] = ", ".join(row.networks)
-                                    except Exception:
-                                        pass
+                                    row_out['network'] = row.networks
                                 if 'status' in sel and row.status:
                                     row_out['status'] = row.status
                 except Exception:
@@ -549,7 +534,7 @@ async def xt_player_api(
             "cover": s.get("cover"),
             "plot": s.get("plot"),
             "rating": s.get("rating"),
-            "releaseDate": "",
+            "releaseDate": None,
             "stream_type": "series",
             "series_id": s.get("series_id"),
             "backdrop_path": [],
@@ -584,16 +569,8 @@ async def xt_player_api(
                             info['plot'] = row.overview
                         if ('poster' in sel_s or 'cover' in sel_s) and (row.poster_path or '').strip():
                             info['cover'] = _tmdb_image_url(row.poster_path)
-                        if 'backdrop' in sel_s:
-                            bks = []
-                            if row.images and isinstance(row.images, dict):
-                                for fp in (row.images.get('backdrops') or []):
-                                    if fp:
-                                        bks.append(_tmdb_image_url(fp))
-                            elif row.backdrop_path:
-                                bks.append(_tmdb_image_url(row.backdrop_path))
-                            if bks:
-                                info['backdrop_path'] = bks
+                        if 'backdrop' in sel_s and row.backdrop_path:
+                            info['backdrop_path'] = [_tmdb_image_url(row.backdrop_path)]
                         if 'rating' in sel_s and row.rating is not None:
                             info['rating'] = float(row.rating)
                         if 'rating_5based' in sel_s and row.rating is not None:
@@ -612,17 +589,11 @@ async def xt_player_api(
                         if 'releaseDate' in sel_s and (row.first_air_date or '').strip():
                             info['releaseDate'] = row.first_air_date
                         if 'genre' in sel_s and row.genres:
-                            try:
-                                info['genre'] = ", ".join(row.genres)
-                            except Exception:
-                                pass
+                            info['genre'] = row.genres
                         if 'cast' in sel_s and row.cast:
                             info['cast'] = row.cast
                         if 'director' in sel_s and row.created_by:
-                            try:
-                                info['director'] = ", ".join(row.created_by)
-                            except Exception:
-                                pass
+                            info['director'] = row.created_by
                         if 'episode_run_time' in sel_s and row.episode_run_time_mins:
                             info['episode_run_time'] = str(row.episode_run_time_mins)
                         if 'tmdb_id' in sel_s:
@@ -630,17 +601,11 @@ async def xt_player_api(
                         if 'imdb_id' in sel_s and row.imdb_id:
                             info['imdb_id'] = row.imdb_id
                         if 'origin_country' in sel_s and row.origin_country:
-                            try:
-                                info['origin_country'] = ", ".join(row.origin_country)
-                            except Exception:
-                                pass
+                            info['origin_country'] = row.origin_country
                         if 'youtube_trailer' in sel_s and row.youtube_trailer:
                             info['youtube_trailer'] = f"https://www.youtube.com/watch?v={row.youtube_trailer}"
                         if 'network' in sel_s and row.networks:
-                            try:
-                                info['network'] = ", ".join(row.networks)
-                            except Exception:
-                                pass
+                            info['network'] = row.networks
                         if 'status' in sel_s and row.status:
                             info['status'] = row.status
                     # Episodi: arricchisci ogni episodio se richiesto
@@ -682,7 +647,18 @@ async def xt_player_api(
                                         ep_info['air_date'] = q.air_date
                                     if 'guest_stars' in sel_e and q.guest_stars:
                                         try:
-                                            ep_info['guest_stars'] = ", ".join(q.guest_stars)
+                                            if isinstance(q.guest_stars, list):
+                                                ep_info['guest_stars'] = ", ".join([str(x) for x in q.guest_stars])
+                                            else:
+                                                ep_info['guest_stars'] = str(q.guest_stars)
+                                        except Exception:
+                                            pass
+                                    if 'crew' in sel_e and q.crew:
+                                        try:
+                                            if isinstance(q.crew, list):
+                                                ep_info['crew'] = ", ".join([str(x) for x in q.crew])
+                                            else:
+                                                ep_info['crew'] = str(q.crew)
                                         except Exception:
                                             pass
                                     if 'rating' in sel_e and q.vote_average is not None:
@@ -701,31 +677,34 @@ async def xt_player_api(
                                 new_list.append(ep)
                             new_eps[skey] = new_list
                         s['episodes_by_season'] = new_eps
-                    # Seasons: enrich season list according to selection
-                    if sel_season and row and row.seasons_json:
-                        seasons_by_num = {}
+                    # Seasons: enrich season list according to selection (from tmdb_seasons)
+                    if sel_season and row:
                         try:
-                            for ss in (row.seasons_json or []):
-                                seasons_by_num[int(ss.get('season_number'))] = ss
+                            from app import db as _db
+                            s_rows = s2.query(_db.TMDBSeason).filter(
+                                _db.TMDBSeason.tmdb_series_id == m.tmdb_id,
+                                _db.TMDBSeason.language == lang,
+                            ).all()
+                            seasons_by_num = {int(x.season_number): x for x in s_rows}
+                            new_seasons = []
+                            for ss in seasons_list:
+                                snum = int(ss.get('season_number') or 0)
+                                srow = seasons_by_num.get(snum)
+                                if srow:
+                                    if 'name' in sel_season and (srow.name or '').strip():
+                                        ss['name'] = srow.name
+                                    if 'poster_path' in sel_season and (srow.poster_path or '').strip():
+                                        ss['poster_path'] = srow.poster_path
+                                    if 'cover' in sel_season and (srow.poster_path or '').strip():
+                                        ss['cover'] = _tmdb_image_url(str(srow.poster_path))
+                                    if 'air_date' in sel_season and (srow.air_date or '').strip():
+                                        ss['air_date'] = srow.air_date
+                                    if 'id' in sel_season and srow.season_tmdb_id:
+                                        ss['id'] = str(srow.season_tmdb_id)
+                                new_seasons.append(ss)
+                            seasons_list = new_seasons
                         except Exception:
-                            seasons_by_num = {}
-                        new_seasons = []
-                        for ss in seasons_list:
-                            snum = int(ss.get('season_number') or 0)
-                            srow = seasons_by_num.get(snum) or {}
-                            if 'name' in sel_season and (srow.get('name') or '').strip():
-                                ss['name'] = srow.get('name')
-                            if 'poster_path' in sel_season and (srow.get('poster_path') or '').strip():
-                                ss['poster_path'] = srow.get('poster_path')
-                            if 'cover' in sel_season and (srow.get('poster_path') or '').strip():
-                                ss['cover'] = _tmdb_image_url(srow.get('poster_path'))
-                            if 'air_date' in sel_season and (srow.get('air_date') or '').strip():
-                                ss['air_date'] = srow.get('air_date')
-                            if 'id' in sel_season and srow.get('id'):
-                                ss['id'] = str(srow.get('id'))
-                            # backdrop_path and vote_average not commonly available on season summary; best-effort
-                            new_seasons.append(ss)
-                        seasons_list = new_seasons
+                            pass
         except Exception:
             pass
         return {"info": info, "episodes": s.get("episodes_by_season", {}), "seasons": seasons_list}
@@ -866,9 +845,9 @@ async def xt_get_php(
     movie_items += m_movies
     series_items += m_series
     base_url = (xt.get("resolver_url") or "").strip() or stream_resolver_base(request)
-    live_streams, _ = build_live_streams(base_url, live_items)
-    vod_streams, _ = build_vod_streams(base_url, movie_items)
-    series_map, _ = build_series_collections(base_url, series_items)
+    live_streams, _ = build_live_streams(base_url, live_items, xt)
+    vod_streams, _ = build_vod_streams(base_url, movie_items, xt)
+    series_map, _ = build_series_collections(base_url, series_items, xt)
     lines = ["#EXTM3U"]
     used_tvg_counts: Dict[str, int] = {}
     used_tvg_set: set[str] = set()
@@ -944,28 +923,102 @@ async def root_get_php(
 
 @router.get("/xtream/{xt_id}/live/{u}/{p}/{stream_id}.{ext}")
 async def xt_live_redirect(request: Request, xt_id: str, u: str, p: str, stream_id: str, ext: str):
-    _ = require_xtream(xt_id, u, p)
+    logger = logging.getLogger(__name__)
+    xt = require_xtream(xt_id, u, p)
     cache_file = os.path.join(config.XTREAM_CACHE_DIR, f"{xt_id}.json")
     data = config.read_json(cache_file, {})
     for s in data.get("live_streams", []):
         if str(s.get("stream_id")) == str(stream_id):
             url = s.get("direct_source")
             if url:
-                return RedirectResponse(url=url, status_code=302)
+                # Se è un link interno /tv?u=..., prova ad applicare subito la policy (mediaflow) per massima compatibilità client
+                try:
+                    from urllib.parse import urlparse, parse_qs
+                    pu = urlparse(url)
+                    if pu.path.rstrip('/') == '/tv':
+                        qs = parse_qs(pu.query)
+                        orig = (qs.get('u') or [''])[0]
+                        logger.info("xtream/live: stream_id=%s ext=%s direct_source=/tv u=%s", stream_id, ext, redact_url(orig))
+                        if orig:
+                            out = pol.apply_policy(request, orig, 'tv')
+                            if out and out.get('ok') and out.get('resolvedUrl'):
+                                target = out['resolvedUrl']
+                                logger.info("xtream/live: policy resolved -> %s", redact_url(target))
+                                # Optional precheck to log proxy reachability
+                                if os.environ.get("MF_PRECHECK_HEAD", "").lower() in ("1","true","yes"):
+                                    try:
+                                        async with httpx.AsyncClient(follow_redirects=True, timeout=5.0) as cli:
+                                            r = await cli.head(target)
+                                            logger.info("xtream/live: precheck HEAD %s -> %s", redact_url(target), r.status_code)
+                                    except Exception as e:
+                                        logger.warning("xtream/live: precheck error for %s: %s", redact_url(target), e)
+                                # For TiviMate and similar, a first URL ending with .m3u8 helps extractor selection
+                                # Se il target è un manifest HLS, restituisci un piccolo master .m3u8
+                                # così il client sceglie HLS senza ulteriori redirect.
+                                if 'm3u8' in (target or '').lower():
+                                    body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
+                                    logger.info("xtream/live: serving inline M3U8 stub -> %s", redact_url(target))
+                                    return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
+                                # Altrimenti, redirect diretto al target risolto
+                                logger.info("xtream/live: redirecting directly to target %s", redact_url(target))
+                                return RedirectResponse(url=target, status_code=302)
+                except Exception:
+                    logger.exception("xtream/live: error applying policy for stream_id=%s", stream_id)
+                # Fallback: redirect to the original direct source URL
+                # Ensure absolute URL for fallback
+                try:
+                    if url.startswith("/"):
+                        base = (xt.get('resolver_url') or '').strip() or stream_resolver_base(request)
+                        url_abs = base.rstrip('/') + url
+                    else:
+                        url_abs = url
+                except Exception:
+                    url_abs = url
+                logger.info("xtream/live: fallback redirect to direct_source %s", redact_url(url_abs))
+                return RedirectResponse(url=url_abs, status_code=302)
             break
     raise HTTPException(404, "Live stream non trovato")
 
 
 @router.get("/xtream/{xt_id}/movie/{u}/{p}/{stream_id}.{ext}")
 async def xt_movie_redirect(request: Request, xt_id: str, u: str, p: str, stream_id: str, ext: str):
-    _ = require_xtream(xt_id, u, p)
+    xt = require_xtream(xt_id, u, p)
     cache_file = os.path.join(config.XTREAM_CACHE_DIR, f"{xt_id}.json")
     data = config.read_json(cache_file, {})
     for s in data.get("vod_streams", []):
         if str(s.get("stream_id")) == str(stream_id):
             url = s.get("direct_source")
             if url:
-                return RedirectResponse(url=url, status_code=302)
+                # Apply policy if it's an internal /tv link
+                try:
+                    from urllib.parse import urlparse, parse_qs, quote as _quote
+                    pu = urlparse(url)
+                    if pu.path.rstrip('/') == '/tv':
+                        qs = parse_qs(pu.query)
+                        orig = (qs.get('u') or [''])[0]
+                        out = pol.apply_policy(request, orig, 'tv')
+                        if out and out.get('ok') and out.get('resolvedUrl'):
+                            target = out['resolvedUrl']
+                            ua = (request.headers.get('user-agent') or '').lower()
+                            # Se è HLS, serviamo uno stub M3U8 (no proxy)
+                            if 'm3u8' in (target or '').lower():
+                                body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
+                                logger.info("xtream/movie: serving inline M3U8 stub -> %s", redact_url(target))
+                                return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
+                            logger.info("xtream/movie: redirecting directly to target %s", redact_url(target))
+                            return RedirectResponse(url=target, status_code=302)
+                except Exception:
+                    pass
+                # Fallback: redirect to direct source (absolute)
+                try:
+                    if url.startswith('/'):
+                        base = (xt.get('resolver_url') or '').strip() or stream_resolver_base(request)
+                        url_abs = base.rstrip('/') + url
+                    else:
+                        url_abs = url
+                except Exception:
+                    url_abs = url
+                return RedirectResponse(url=url_abs, status_code=302)
             break
     raise HTTPException(404, "VOD stream non trovato")
 
@@ -974,7 +1027,7 @@ async def xt_movie_redirect(request: Request, xt_id: str, u: str, p: str, stream
 async def xt_series_redirect(
     request: Request, xt_id: str, u: str, p: str, series_id: str, season: int, episode: int, ext: str
 ):
-    _ = require_xtream(xt_id, u, p)
+    xt = require_xtream(xt_id, u, p)
     cache_file = os.path.join(config.XTREAM_CACHE_DIR, f"{xt_id}.json")
     data = config.read_json(cache_file, {})
     sm = data.get("series_map", {}).get(str(series_id))
@@ -985,24 +1038,79 @@ async def xt_series_redirect(
         if ep.get("title") == ep_code:
             url = ep.get("direct_source")
             if url:
-                return RedirectResponse(url=url, status_code=302)
+                # Apply policy if it's an internal /tv link
+                try:
+                    from urllib.parse import urlparse, parse_qs, quote as _quote
+                    pu = urlparse(url)
+                    if pu.path.rstrip('/') == '/tv':
+                        qs = parse_qs(pu.query)
+                        orig = (qs.get('u') or [''])[0]
+                        out = pol.apply_policy(request, orig, 'tv')
+                        if out and out.get('ok') and out.get('resolvedUrl'):
+                            target = out['resolvedUrl']
+                            ua = (request.headers.get('user-agent') or '').lower()
+                            if 'm3u8' in (target or '').lower():
+                                body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
+                                logger.info("xtream/series: serving inline M3U8 stub -> %s", redact_url(target))
+                                return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
+                            logger.info("xtream/series: redirecting directly to target %s", redact_url(target))
+                            return RedirectResponse(url=target, status_code=302)
+                except Exception:
+                    pass
+                # Fallback: absolute direct source
+                try:
+                    if url.startswith('/'):
+                        base = (xt.get('resolver_url') or '').strip() or stream_resolver_base(request)
+                        url_abs = base.rstrip('/') + url
+                    else:
+                        url_abs = url
+                except Exception:
+                    url_abs = url
+                return RedirectResponse(url=url_abs, status_code=302)
             break
     raise HTTPException(404, "Episodio non trovato")
 
 
 @router.get("/xtream/{xt_id}/series/{u}/{p}/{episode_id}.{ext}")
 async def xt_series_by_epid_redirect(request: Request, xt_id: str, u: str, p: str, episode_id: str, ext: str):
-    _ = require_xtream(xt_id, u, p)
+    xt = require_xtream(xt_id, u, p)
     cache_file = os.path.join(config.XTREAM_CACHE_DIR, f"{xt_id}.json")
     data = config.read_json(cache_file, {})
     series_map = data.get("series_map", {})
-    for sm in series_map.values():
+    for sid, sm in series_map.items():
         for eps in sm.get("episodes_by_season", {}).values():
             for ep in eps:
                 if str(ep.get("id")) == str(episode_id):
                     url = ep.get("direct_source")
                     if url:
-                        return RedirectResponse(url=url, status_code=302)
+                        try:
+                            from urllib.parse import urlparse, parse_qs, quote as _quote
+                            pu = urlparse(url)
+                            if pu.path.rstrip('/') == '/tv':
+                                qs = parse_qs(pu.query)
+                                orig = (qs.get('u') or [''])[0]
+                                out = pol.apply_policy(request, orig, 'tv')
+                                if out and out.get('ok') and out.get('resolvedUrl'):
+                                    target = out['resolvedUrl']
+                                    ua = (request.headers.get('user-agent') or '').lower()
+                                    if 'm3u8' in (target or '').lower():
+                                        body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
+                                        logger.info("xtream/series-epid: serving inline M3U8 stub -> %s", redact_url(target))
+                                        return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
+                                    logger.info("xtream/series-epid: redirecting directly to target %s", redact_url(target))
+                                    return RedirectResponse(url=target, status_code=302)
+                        except Exception:
+                            pass
+                        # Fallback: absolute direct source
+                        try:
+                            if url.startswith('/'):
+                                base = (xt.get('resolver_url') or '').strip() or stream_resolver_base(request)
+                                url_abs = base.rstrip('/') + url
+                            else:
+                                url_abs = url
+                        except Exception:
+                            url_abs = url
+                        return RedirectResponse(url=url_abs, status_code=302)
     raise HTTPException(404, "Episodio non trovato")
 
 
@@ -1017,6 +1125,7 @@ async def live_no_xt(request: Request, u: str, p: str, stream_id: str, ext: str)
         stream_id=stream_id,
         ext=ext,
     )
+
 
 
 @router.get("/movie/{u}/{p}/{stream_id}.{ext}")
@@ -1052,6 +1161,13 @@ async def series_by_epid_no_xt(request: Request, u: str, p: str, episode_id: str
         ext=ext,
     )
 
+
+@router.get("/xtream/{xt_id}/redir/{u}/{p}/{name}.m3u8")
+async def xt_minimal_redir(xt_id: str, u: str, p: str, name: str, target: Optional[str] = None):
+    _ = require_xtream(xt_id, u, p)
+    if not target:
+        raise HTTPException(400, "target mancante")
+    return RedirectResponse(url=target, status_code=302)
 
 @router.get("/player_api.php")
 async def root_player_api(

@@ -11,6 +11,8 @@ from fastapi import HTTPException, Request
 
 from app import config
 from app.adapter import ResolverError, run_resolver
+import logging
+from app.logutil import redact_url
 
 POLICIES_FILE = os.path.join(config.CONFIG_DIR, "resolver_policies.json")
 
@@ -120,11 +122,89 @@ def _wrap_proxy(url: str, enabled: bool) -> str:
 
 
 def _build_mediaflow_url(original_url: str, mf: Dict[str, Any]) -> str:
+    logger = logging.getLogger(__name__)
     # pick preset if specified, else default
     preset = (mf.get("preset") or "").strip() or None
     mflow, pwd = config.get_mediaflow_preset(preset)
     if not mflow or not pwd:
         raise HTTPException(status_code=400, detail="Config mancante: imposta mediaflow_url e api_password in /admin.")
+    # Optional: per-field enrichment from DB
+    dbf = mf.get("db_fields") or {}
+    legacy = bool(mf.get("use_db_metadata"))
+    wants_any = legacy or any(bool(v) for v in dbf.values())
+    if wants_any:
+        try:
+            # Lookup PlaylistItem by original_url and inject headers/clearkey from attrs.special
+            from app import db as _db
+            from sqlalchemy import select
+            with _db.SessionLocal() as s:
+                cand = (
+                    s.execute(
+                        select(_db.PlaylistItem)
+                        .where(_db.PlaylistItem.original_url == original_url)
+                        .order_by(_db.PlaylistItem.requires_proxy.desc().nullslast(), _db.PlaylistItem.id.desc())
+                    ).scalars().first()
+                )
+                if cand:
+                    hmap = mf.setdefault('headers', {})
+                    if legacy or dbf.get('h_user-agent'):
+                        if getattr(cand, 'headers_user_agent', None):
+                            hmap['h_user-agent'] = str(cand.headers_user_agent)
+                    if legacy or dbf.get('h_referer'):
+                        if getattr(cand, 'headers_referer', None):
+                            hmap['h_referer'] = str(cand.headers_referer)
+                    if legacy or dbf.get('h_origin'):
+                        if getattr(cand, 'headers_origin', None):
+                            hmap['h_origin'] = str(cand.headers_origin)
+                    if legacy or dbf.get('h_cookie'):
+                        if getattr(cand, 'headers_cookie', None):
+                            hmap['h_cookie'] = str(cand.headers_cookie)
+                    if legacy or dbf.get('key_id') or dbf.get('key'):
+                        if str(getattr(cand, 'license_type', '') or '').lower() == 'clearkey':
+                            kid = (getattr(cand, 'clearkey_kid', '') or '').strip()
+                            key = (getattr(cand, 'clearkey_key', '') or '').strip()
+                            if (legacy or dbf.get('key_id')) and kid:
+                                mf.setdefault('clearkey', {})['key_id'] = kid
+                            if (legacy or dbf.get('key')) and key:
+                                mf.setdefault('clearkey', {})['key'] = key
+                    if isinstance(cand.attrs, dict):
+                        sp = (cand.attrs or {}).get('special') or {}
+                        if isinstance(sp, dict):
+                            hdrs_in = (sp.get('headers') or {}) if isinstance(sp.get('headers'), dict) else {}
+                            for hk, hv in hdrs_in.items():
+                                nm = (hk or '').strip().lower()
+                                if not hv:
+                                    continue
+                                if (legacy or dbf.get('h_user-agent')) and nm == 'user-agent':
+                                    hmap.setdefault('h_user-agent', str(hv))
+                                elif (legacy or dbf.get('h_referer')) and nm in ('referer', 'referrer'):
+                                    hmap.setdefault('h_referer', str(hv))
+                                elif (legacy or dbf.get('h_origin')) and nm == 'origin':
+                                    hmap.setdefault('h_origin', str(hv))
+                                elif (legacy or dbf.get('h_cookie')) and nm in ('cookie', 'cookies'):
+                                    hmap.setdefault('h_cookie', str(hv))
+                            lic = sp.get('license') or {}
+                            if (legacy or dbf.get('key_id') or dbf.get('key')) and isinstance(lic, dict) and (str(lic.get('type') or '').lower() == 'clearkey'):
+                                kid2 = str(lic.get('key_id') or lic.get('kid') or '').strip()
+                                key2 = str(lic.get('key') or '').strip()
+                                if (legacy or dbf.get('key_id')) and kid2:
+                                    mf.setdefault('clearkey', {})['key_id'] = kid2
+                                if (legacy or dbf.get('key')) and key2:
+                                    mf.setdefault('clearkey', {})['key'] = key2
+        except Exception:
+            # Non-fatal: fallback to policy-provided values
+            pass
+    try:
+        # Log sintetico della build MF (redatto)
+        logger.debug(
+            "MF build: endpoint=%s path=%s headers=%s url=%s",
+            (mf.get("endpoint") or ""),
+            (mf.get("path") or ""),
+            {k: ("****" if k in ("h_cookie",) else v) for k, v in (mf.get("headers") or {}).items()},
+            redact_url(original_url),
+        )
+    except Exception:
+        pass
     endpoint = (mf.get("endpoint") or "extractor_video").lower()
     if endpoint == "proxy":
         path = (mf.get("path") or "").strip().strip("/") or "hls/manifest.m3u8"

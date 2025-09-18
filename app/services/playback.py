@@ -9,9 +9,7 @@ from typing import Dict, Optional
 import httpx
 from fastapi import Request, HTTPException
 
-from app.adapter import run_resolver, ResolverError
 from app.config import url_encode, get_mediaflow_preset
-from app.registry import pick_script_for
 from app.services.policies import apply_policy
 
 MEDIAFLOW_PROXY = os.environ.get("MEDIAFLOW_PROXY", "")
@@ -48,32 +46,18 @@ def wrap_proxy(url: str, enabled: bool) -> str:
 
 
 def handle_generic(url: str, kind: str, headers: Optional[Dict[str, str]], use_proxy: bool):
-    try:
-        host = (parse_host(url) or "").lower()
-        script_path = pick_script_for(host)
-        if not script_path:
-            return {
-                "ok": True,
-                "type": "unknown",
-                "resolvedUrl": wrap_proxy(url, use_proxy),
-                "headers": headers or {},
-                "meta": {"resolver": None, "note": "no_resolver_for_domain"},
-            }
+    """Policy-only fallback: no legacy domains.json resolver lookup.
 
-        out = run_resolver(
-            script_path, url, kind,
-            headers=headers,
-            python_command=PYTHON_CMD,
-            cwd=os.path.dirname(script_path),
-        )
-        out["resolvedUrl"] = wrap_proxy(out.get("resolvedUrl", ""), use_proxy)
-        out.setdefault("meta", {})["resolver"] = os.path.basename(script_path)
-        return out
-
-    except ResolverError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"resolver_internal_error: {e}")
+    If no policy matched, just passthrough the original URL (optionally via proxy)
+    and mark the type as unknown.
+    """
+    return {
+        "ok": True,
+        "type": "unknown",
+        "resolvedUrl": wrap_proxy(url, use_proxy),
+        "headers": headers or {},
+        "meta": {"resolver": None, "note": "no_policy_matched"},
+    }
 
 
 def vix_fastpath(url: str) -> str:

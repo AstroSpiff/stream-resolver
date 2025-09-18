@@ -14,8 +14,6 @@ services:
       - ./config:/app/config
       # Resolvers esterni (sola lettura)
       - ./resolvers:/opt/external-resolvers:ro
-      # (opzionale) Sovrascrivi solo il domains.json usato dai resolvers
-      - ./resolvers/config/domains.json:/opt/external-resolvers/config/domains.json:ro
     restart: unless-stopped
     # Uvicorn lanciato come nel tuo compose
     command: >
@@ -25,7 +23,7 @@ services:
       --proxy-headers
       --forwarded-allow-ips='*'
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8791/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8791/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -35,7 +33,6 @@ services:
     environment:
       # Per i resolvers Python esterni (opzionale):
       RESOLVERS_DIR: /opt/external-resolvers
-      DOMAINS_JSON: /opt/external-resolvers/config/domains.json
       PYTHONUNBUFFERED: "1"
       TZ: "Europe/Rome"
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://resolver:resolver@db:5432/streamresolver}

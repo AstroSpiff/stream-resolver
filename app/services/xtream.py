@@ -99,17 +99,23 @@ ATTR_RE = re.compile(r'([a-z0-9\-]+)="([^"]*)"', re.IGNORECASE)
 class M3UItem:
     title: str
     url: str
-    attrs: Dict[str, str]
+    attrs: Dict[str, Any]
     group: str
     tvg_id: str
     tvg_logo: str
     raw: str
+    source_playlist_id: Optional[str] = None
+    source_order: Optional[int] = None
 
 
 def parse_m3u(text: str) -> List[M3UItem]:
     items: List[M3UItem] = []
     lines = [l.rstrip("\n") for l in text.splitlines()]
-    last_inf: Optional[Tuple[Dict[str, str], str]] = None
+    last_inf: Optional[Tuple[Dict[str, Any], str]] = None
+    # Buffer per righe speciali (KODIPROP/EXTVLCOPT) da associare alla prossima URL
+    special_buf: Dict[str, Any] = {}
+    special_headers: Dict[str, str] = {}
+    special_license: Dict[str, Any] = {}
     for i, line in enumerate(lines):
         if line.startswith("#EXTINF:"):
             m = M3U_LINE.match(line)
@@ -119,12 +125,79 @@ def parse_m3u(text: str) -> List[M3UItem]:
             attrs = {k.lower(): v for k, v in ATTR_RE.findall(attrs_str)}
             title = m.group("title").strip()
             last_inf = (attrs, title)
+        elif line.startswith('#KODIPROP:'):
+            try:
+                keyval = line.split(':', 1)[1]
+                if '=' not in keyval:
+                    continue
+                k, v = keyval.split('=', 1)
+                k = (k or '').strip().lower()
+                v = (v or '').strip()
+                # Headers
+                if k == 'inputstream.adaptive.stream_headers':
+                    # Esempi: "User-Agent=Foo" oppure "Header1=V1&Header2=V2"
+                    parts = re.split(r'&|&amp;', v)
+                    for p in parts:
+                        if not p:
+                            continue
+                        if '=' in p:
+                            hk, hv = p.split('=', 1)
+                            hk = hk.strip()
+                            hv = hv.strip()
+                            if hk:
+                                special_headers[hk] = hv
+                elif k == 'inputstream.adaptive.license_type':
+                    special_license['type'] = v.lower()
+                elif k == 'inputstream.adaptive.license_key':
+                    # Formato tipico clearkey: "kid:key" (hex)
+                    if ':' in v:
+                        kid, key = v.split(':', 1)
+                        special_license['key_id'] = kid.strip()
+                        special_license['key'] = key.strip()
+                    else:
+                        # fallback: tutto in key
+                        special_license['key'] = v
+            except Exception:
+                # ignora errori parse KODIPROP
+                pass
+        elif line.startswith('#EXTVLCOPT:'):
+            try:
+                keyval = line.split(':', 1)[1]
+                if '=' not in keyval:
+                    continue
+                k, v = keyval.split('=', 1)
+                k = (k or '').strip().lower()
+                v = (v or '').strip()
+                if k == 'http-user-agent':
+                    special_headers['User-Agent'] = v
+            except Exception:
+                pass
         elif line and not line.startswith("#"):
             if last_inf:
                 attrs, title = last_inf
                 group = attrs.get("group-title", "").strip()
                 tvg_id = attrs.get("tvg-id", "").strip()
                 tvg_logo = attrs.get("tvg-logo", "").strip()
+                # Costruisci attrs.special se abbiamo raccolto info
+                if special_headers or special_license:
+                    try:
+                        sp: Dict[str, Any] = {}
+                        if special_headers:
+                            sp['headers'] = dict(special_headers)
+                        if special_license:
+                            sp['license'] = dict(special_license)
+                        # Format dal suffisso URL
+                        u_lower = line.strip().lower()
+                        if u_lower.endswith('.mpd'):
+                            sp['format'] = 'dash'
+                        elif u_lower.endswith('.m3u8'):
+                            sp['format'] = 'hls'
+                        # Flag requires_proxy se presenti headers o licenza
+                        sp['requires_proxy'] = True
+                        attrs = dict(attrs)
+                        attrs['special'] = sp
+                    except Exception:
+                        pass
                 items.append(
                     M3UItem(
                         title=title,
@@ -137,6 +210,10 @@ def parse_m3u(text: str) -> List[M3UItem]:
                     )
                 )
                 last_inf = None
+                # Reset buffer per prossima entry
+                special_buf = {}
+                special_headers = {}
+                special_license = {}
     return items
 
 
@@ -149,6 +226,8 @@ def _read_playlist(pl_id: str) -> List[M3UItem]:
     if config.get_storage_backend() == 'db':
         try:
             with db.SessionLocal() as s:
+                prow = s.get(db.Playlist, pl_id)
+                porder = getattr(prow, 'order_num', None) if prow else None
                 rows = s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pl_id).all()
                 out: List[M3UItem] = []
                 for r in rows:
@@ -160,6 +239,8 @@ def _read_playlist(pl_id: str) -> List[M3UItem]:
                         tvg_id=r.tvg_id or "",
                         tvg_logo=r.tvg_logo or "",
                         raw="",
+                        source_playlist_id=pl_id,
+                        source_order=porder,
                     ))
                 return out
         except Exception:
@@ -212,21 +293,68 @@ def try_extract_tv_triplet(url: str) -> Optional[Tuple[str, int, int]]:
 
 
 def guess_is_series(item: M3UItem) -> bool:
+    """Heuristics to detect TV series episodes.
+
+    Rules (to avoid false positives on live channels):
+    - If URL contains explicit /tv/.../<sid>/<season>/<episode> → series.
+    - Otherwise, detect explicit episode patterns in the EXTINF context (title, tvg-id), NOT by words like 'serie'/'series'.
+      Accepted patterns:
+        - SNNENN with optional spaces (e.g., S1E2, S01E12, S01 E12)
+        - NxN (e.g., 1x2, 01x12)
+    """
     if try_extract_tv_triplet(item.url):
         return True
-    g = item.group.lower()
-    t = item.title.lower()
-    if "serie" in g or "series" in g or "stagione" in t or re.search(r"\bs\d{1,2}e\d{1,2}\b", t, re.I):
+    # Build a context string from title and tvg-id only (avoid group-title words like 'serie')
+    ctx = f"{item.title} {item.tvg_id}".strip()
+    if not ctx:
+        return False
+    # SNNENN (with optional spaces) — allow larger episode numbers, keep season reasonable
+    if re.search(r"\bS\d{1,3}\s*E\d{1,4}\b", ctx, re.I):
         return True
+    # Varianti: "S01 Ep12", "S01 Episodio 12", "Stagione 1 Episodio 2"
+    if re.search(r"\bS\d{1,3}\s*(?:Ep|Episodio|Epis\.)\s*\d{1,4}\b", ctx, re.I):
+        return True
+    if re.search(r"\bStagione\s*\d{1,3}\s*(?:Episodio|Ep|Epis\.)\s*\d{1,4}\b", ctx, re.I):
+        return True
+    # NxN pattern (1–4 digits) with filter to avoid common resolutions like 1920x1080
+    m = re.search(r"\b(\d{1,4})x(\d{1,4})\b", ctx, re.I)
+    if m:
+        try:
+            a = int(m.group(1)); b = int(m.group(2))
+            # Exclude if both sides look like resolution (>=1000x>=1000)
+            if not (a >= 1000 and b >= 1000):
+                return True
+        except Exception:
+            # If parsing fails, treat as non-series to stay safe
+            pass
     return False
 
 
 def guess_is_movie(item: M3UItem) -> bool:
+    # 1) URL esplicita /movie/<id>
     if try_extract_movie_id(item.url):
         return True
-    g = item.group.lower()
-    if "film" in g or "movie" in g:
+    # 2) Evita falsi positivi: se sembra una serie, non è un film
+    if guess_is_series(item):
+        return False
+    # 3) Heuristics: richiedi SEMPRE un anno (1900-2099) nel titolo
+    #    e usa il group-title (film/movie) come ulteriore segnale.
+    title = (item.title or "").strip()
+    if not title:
+        return False
+    # Evita match su risoluzioni tipo 1920x1080
+    if re.search(r"\b(19\d{2}|20\d{2})x\d{3,4}\b", title):
+        return False
+    has_year = bool(
+        re.search(r"(\(|\[|\b)(19\d{2}|20\d{2})(\)|\]|\b)", title)
+        or re.search(r"(?:\s|\-|\.|\/)\b(19\d{2}|20\d{2})\b\s*$", title)
+    )
+    if not has_year:
+        return False
+    g = (item.group or "").lower()
+    if ("film" in g) or ("movie" in g):
         return True
+    # Nessun indicatore di gruppo: per prudenza NON classificare come film
     return False
 
 
@@ -329,7 +457,7 @@ def make_direct_live(base_url: str, original_url: str) -> str:
 
 
 # ====== DURATE ======
-def _extract_duration(attrs: Dict[str, str]) -> int:
+def _extract_duration(attrs: Dict[str, Any]) -> int:
     for key in ("tvg-duration", "tvg-duration-secs", "duration", "duration_secs"):
         val = (attrs.get(key) or "").strip()
         if not val:
@@ -361,7 +489,7 @@ def _extract_duration(attrs: Dict[str, str]) -> int:
 
 
 # ====== COSTRUZIONE STRUTTURE ======
-def build_live_streams(base_url: str, items: Iterable[M3UItem]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+def build_live_streams(base_url: str, items: Iterable[M3UItem], xt_config: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     out: List[Dict[str, Any]] = []
     cat_map: Dict[str, str] = {}
     used_epg_ids: set[str] = set()
@@ -369,6 +497,8 @@ def build_live_streams(base_url: str, items: Iterable[M3UItem]) -> Tuple[List[Di
     used_stream_ids: set[int] = set()
     SAFE_MAX = 1_000_000_000
     num = 1
+    live_fields = set(xt_config.get('export_live_fields') or [])
+
     for it in items:
         cat_name = normalize_group_for_type(it.group or "Live", "live")
         cat_id = get_category_id(cat_name, 1000)
@@ -391,47 +521,85 @@ def build_live_streams(base_url: str, items: Iterable[M3UItem]) -> Tuple[List[Di
             base_counts[base_epg] = i
         used_epg_ids.add(epg_id)
 
-        out.append(
-            {
-                "num": num,
-                "name": it.title.strip(),
-                "stream_type": "live",
-                "type": "live",
-                "type_name": "Live",
-                "type_key": "live",
-                "stream_id": stream_id,
-                "stream_icon": it.tvg_logo or "",
-                "epg_channel_id": epg_id,
-                "tvg_id": epg_id,
-                "category_id": cat_id,
-                "category_id_int": int(cat_id),
-                "category_name": cat_name,
-                "added": str(now_ts()),
-                "is_adult": "0",
-                "custom_sid": "",
-                "tv_archive": 0,
-                "tv_archive_duration": 0,
-                "bitrate": "0",
-                "stream_status": 1,
-                "container_extension": "m3u8",
-                "direct_source": make_direct_live(base_url, it.url),
-            }
-        )
+        stream_data = {
+            "num": num,
+            "name": it.title.strip(),
+            "stream_type": "live",
+            "stream_id": stream_id,
+            "stream_icon": it.tvg_logo or "",
+            "epg_channel_id": epg_id,
+            "added": str(now_ts()),
+            "category_id": cat_id,
+            "custom_sid": "",
+            "tv_archive": 0,
+            "direct_source": make_direct_live(base_url, it.url),
+            "tv_archive_duration": 0,
+        }
+
+        # Conditionally add fields based on export settings
+        if 'type' in live_fields:
+            stream_data['type'] = "live"
+        if 'type_name' in live_fields:
+            stream_data['type_name'] = "Live"
+        if 'type_key' in live_fields:
+            stream_data['type_key'] = "live"
+        if 'tvg_id' in live_fields:
+            stream_data['tvg_id'] = epg_id
+        if 'category_id_int' in live_fields:
+            stream_data['category_id_int'] = int(cat_id)
+        if 'category_name' in live_fields:
+            stream_data['category_name'] = cat_name
+        if 'is_adult' in live_fields:
+            stream_data['is_adult'] = "0"
+        if 'bitrate' in live_fields:
+            stream_data['bitrate'] = "0"
+        if 'stream_status' in live_fields:
+            stream_data['stream_status'] = 1
+        if 'container_extension' in live_fields:
+            stream_data['container_extension'] = "m3u8"
+
+        out.append(stream_data)
         num += 1
     return out, cat_map
 
 
-def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+def build_vod_streams(base_url: str, m3us: Iterable[M3UItem], xt_config: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     out: List[Dict[str, Any]] = []
     cat_map: Dict[str, str] = {}
     num = 1
     st = config.load_settings()
     tmdb_cfg = (st.get('tmdb') or {})
     lang = tmdb_cfg.get('language') or 'it-IT'
-    mv_fields = set((tmdb_cfg.get('movie_fields') or []))
+    mv_fields = set(xt_config.get('export_movie_fields') or [])
+    policy = (xt_config.get('dedupe_policy') or 'm3u_order').strip()
+
+    # Raggruppa per chiave contenuto (titolo normalizzato + anno)
+    groups: Dict[str, List[M3UItem]] = defaultdict(list)
+    from app.routers.admin_tmdb import _norm_title_year, _sig_for
     for it in m3us:
         if not (guess_is_movie(it) or try_extract_movie_id(it.url)):
             continue
+        t, y = _norm_title_year(it.title, it.attrs or {})
+        key = _sig_for('movie', t, y)
+        groups[key].append(it)
+
+    def pick(items: List[M3UItem], key: str) -> M3UItem:
+        if not items:
+            raise ValueError('empty items')
+        if policy == 'random':
+            idx = crc32_num(key) % len(items)
+            return items[idx]
+        # m3u_order / exclude_low: scegli quello con order_num più basso (priorità alta)
+        def ordv(x: M3UItem) -> int:
+            o = x.source_order
+            try:
+                return int(o) if o is not None else 10**9
+            except Exception:
+                return 10**9
+        return sorted(items, key=lambda x: (ordv(x)))[0]
+
+    for key, items in groups.items():
+        it = pick(items, key)
         mid = try_extract_movie_id(it.url) or str(crc32_num(it.url))
         cat_name = normalize_group_for_type(it.group or "Film", "vod")
         cat_id = get_category_id(cat_name, 2000)
@@ -439,14 +607,10 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict
         name = it.title.strip()
         stream_icon = it.tvg_logo or ""
         rating_val = None
-        # Prefer TMDB metadata if present
+        # Prefer TMDB metadata se presente
         try:
             with db.SessionLocal() as s:
-                # build signature like in admin_tmdb
-                from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                t, y = _norm_title_year(it.title, it.attrs or {})
-                sig = _sig_for('movie', t, y)
-                mrow = s.get(db.TMDBMap, sig)
+                mrow = s.get(db.TMDBMap, key)
                 if mrow:
                     row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
                     if row:
@@ -463,10 +627,7 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict
         try:
             if 'duration' in mv_fields:
                 with db.SessionLocal() as s:
-                    from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                    t, y = _norm_title_year(it.title, it.attrs or {})
-                    sig = _sig_for('movie', t, y)
-                    mrow = s.get(db.TMDBMap, sig)
+                    mrow = s.get(db.TMDBMap, key)
                     if mrow:
                         row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
                         if row and row.runtime_mins:
@@ -486,14 +647,14 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict
 
         out.append(
             {
-                "num": str(num),
+                "num": num,
                 "name": name,
                 "stream_id": str(mid),
                 "stream_type": "movie",
                 "stream_icon": stream_icon,
-                "rating": rating_val,
+                "rating": rating_val if rating_val is not None else 0.0,
                 "rating_5based": rating_5,
-                "added": "",
+                "added": str(now_ts()),
                 "duration": str(dur_secs),
                 "duration_secs": str(dur_secs),
                 "duration_fmt": _fmt_hhmmss(dur_secs),
@@ -501,7 +662,7 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict
                 "category_name": cat_name,
                 "bitrate": "0",
                 "epg_channel_id": _slug_id(name),
-                "container_extension": "m3u8",
+                "container_extension": "mp4",
                 "direct_source": make_direct_video(base_url, it.url),
             }
         )
@@ -509,13 +670,19 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem]) -> Tuple[List[Dict
     return out, cat_map
 
 
-def build_series_collections(base_url: str, items: Iterable[M3UItem]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
+def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
     series_map: Dict[str, Dict[str, Any]] = {}
     cat_map: Dict[str, str] = {}
     st = config.load_settings()
     tmdb_cfg = (st.get('tmdb') or {})
     lang = tmdb_cfg.get('language') or 'it-IT'
-    sr_fields = set((tmdb_cfg.get('series_fields') or []))
+    sr_fields = set(xt_config.get('export_series_fields') or [])
+    ep_fields = set(xt_config.get('export_episode_fields') or [])
+    season_fields = set(xt_config.get('export_season_fields') or [])
+
+    policy = (xt_config.get('dedupe_policy') or 'm3u_order').strip()
+    # Seleziona una sola variante per episodio in base alla policy
+    ep_groups: Dict[str, M3UItem] = {}
     for it in items:
         trip = try_extract_tv_triplet(it.url)
         if not (guess_is_series(it) or trip):
@@ -523,8 +690,43 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem]) -> Tuple[D
         if not trip:
             continue
         sid, season, episode = trip
+        k = f"{sid}:{season}:{episode}"
+        prev = ep_groups.get(k)
+        if not prev:
+            ep_groups[k] = it
+        else:
+            if policy == 'random':
+                # deterministico: scegli in base all'hash chiave
+                idx = crc32_num(k) % 2
+                ep_groups[k] = [prev, it][idx]
+            else:
+                def ordv(x: M3UItem) -> int:
+                    o = x.source_order
+                    try:
+                        return int(o) if o is not None else 10**9
+                    except Exception:
+                        return 10**9
+                # m3u_order / exclude_low: tieni la migliore priorità
+                ep_groups[k] = prev if ordv(prev) <= ordv(it) else it
+
+    for key, it in ep_groups.items():
+        # Chiave nel formato "sid:season:episode" per evitare ambiguità di parse
+        try:
+            sid_str, season_str, episode_str = key.split(":", 2)
+            sid = sid_str
+            season = int(season_str)
+            episode = int(episode_str)
+        except Exception:
+            # Fallback sicuro: prova a estrarre dalla URL; se fallisce, salta
+            trip2 = try_extract_tv_triplet(it.url)
+            if not trip2:
+                continue
+            sid, season, episode = trip2
         name = re.sub(r"\bS(\d{1,2})E(\d{1,2})\b", "", it.title, flags=re.I).strip() or f"Serie {sid}"
         cover = it.tvg_logo or ""
+        plot = ""
+        rating = None
+        seasons_data = {}
         # Try TMDB for series-level metadata
         try:
             with db.SessionLocal() as s:
@@ -539,6 +741,29 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem]) -> Tuple[D
                             name = row.name
                         if 'poster' in sr_fields and (row.poster_path or ''):
                             cover = ("https://image.tmdb.org/t/p/w500" + row.poster_path)
+                        if 'plot' in sr_fields and (row.overview or ''):
+                            plot = row.overview
+                        if 'rating' in sr_fields and row.rating is not None:
+                            rating = float(row.rating)
+                        # Use dedicated seasons table only (seasons_json deprecated)
+                        try:
+                            ss = s.query(db.TMDBSeason).filter(
+                                db.TMDBSeason.tmdb_series_id == mrow.tmdb_id,
+                                db.TMDBSeason.language == lang,
+                            ).all()
+                            for si in ss:
+                                seasons_data[si.season_number] = {
+                                    'season_number': si.season_number,
+                                    'episode_count': si.episode_count,
+                                    'name': si.name,
+                                    'air_date': si.air_date,
+                                    'poster_path': si.poster_path,
+                                    'overview': si.overview,
+                                    'backdrop_path': si.backdrop_path,
+                                }
+                        except Exception:
+                            pass
+
         except Exception:
             pass
         cat_name = normalize_group_for_type(it.group or "Serie", "series")
@@ -550,48 +775,131 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem]) -> Tuple[D
                 "series_id": sid,
                 "name": name,
                 "cover": cover,
-                "plot": "",
-                "rating": "",
+                "plot": plot,
+                "rating": rating,
                 "category_id": cat_id,
                 "episodes_by_season": defaultdict(list),
+                "seasons": {},
                 "category_name": cat_name,
             },
         )
+        
+        # Season data
+        if season_fields and season in seasons_data:
+            season_data = s['seasons'].setdefault(season, {})
+            tmdb_season = seasons_data[season]
+            if 'name' in season_fields and tmdb_season.get('name'):
+                season_data['name'] = tmdb_season['name']
+            if 'poster' in season_fields and tmdb_season.get('poster_path'):
+                season_data['cover'] = "https://image.tmdb.org/t/p/w500" + tmdb_season['poster_path']
+            if 'plot' in season_fields and tmdb_season.get('overview'):
+                season_data['plot'] = tmdb_season['overview']
+            if 'air_date' in season_fields and tmdb_season.get('air_date'):
+                season_data['air_date'] = tmdb_season['air_date']
+
         ep_code = f"S{season:02d}E{episode:02d}"
         ep_id = str(crc32_num(f"{sid}:{season}:{episode}"))
-        dur_secs = _extract_duration(it.attrs)
         # Calcola durata episodio: preferisci TMDB se selezionato
         ep_secs = _extract_duration(it.attrs)
+        ep_plot = ""
+        ep_name = ep_code
+        ep_cover = cover
         try:
-            if 'duration' in sr_fields:
+            if 'duration' in ep_fields or 'plot' in ep_fields or 'name' in ep_fields or 'poster' in ep_fields:
                 with db.SessionLocal() as s2:
                     from app.routers.admin_tmdb import _norm_title_year, _sig_for
                     t2, _ = _norm_title_year(it.title, it.attrs or {})
                     sig2 = _sig_for('series', t2, None)
                     mrow2 = s2.get(db.TMDBMap, sig2)
                     if mrow2:
-                        row2 = s2.get(db.TMDBSeries, {"tmdb_id": mrow2.tmdb_id, "language": lang})
-                        if row2 and row2.episode_run_time_mins:
-                            ep_secs = int(row2.episode_run_time_mins) * 60
+                        ep_row = s2.query(db.TMDBEpisode).filter(
+                            db.TMDBEpisode.tmdb_series_id == mrow2.tmdb_id,
+                            db.TMDBEpisode.language == lang,
+                            db.TMDBEpisode.season == season,
+                            db.TMDBEpisode.episode == episode,
+                        ).first()
+                        if ep_row:
+                            if 'duration' in ep_fields and ep_row.duration_mins:
+                                ep_secs = int(ep_row.duration_mins) * 60
+                            if 'plot' in ep_fields and ep_row.overview:
+                                ep_plot = ep_row.overview
+                            if 'name' in ep_fields and ep_row.name:
+                                ep_name = ep_row.name
+                            if 'poster' in ep_fields and ep_row.still_path:
+                                ep_cover = "https://image.tmdb.org/t/p/w500" + ep_row.still_path
+        except Exception:
+            pass
+        ep_code = f"S{season:02d}E{episode:02d}"
+        ep_id = str(crc32_num(f"{sid}:{season}:{episode}"))
+        ep_secs = _extract_duration(it.attrs)
+        ep_plot = ""
+        ep_name = ep_code
+        ep_cover = cover
+        ep_rating = None
+        ep_rating_5based = None
+
+        try:
+            if 'duration' in ep_fields or 'plot' in ep_fields or 'name' in ep_fields or 'poster' in ep_fields or 'rating' in ep_fields:
+                with db.SessionLocal() as s2:
+                    from app.routers.admin_tmdb import _norm_title_year, _sig_for
+                    t2, _ = _norm_title_year(it.title, it.attrs or {})
+                    sig2 = _sig_for('series', t2, None)
+                    mrow2 = s2.get(db.TMDBMap, sig2)
+                    if mrow2:
+                        ep_row = s2.query(db.TMDBEpisode).filter(
+                            db.TMDBEpisode.tmdb_series_id == mrow2.tmdb_id,
+                            db.TMDBEpisode.language == lang,
+                            db.TMDBEpisode.season == season,
+                            db.TMDBEpisode.episode == episode,
+                        ).first()
+                        if ep_row:
+                            if 'duration' in ep_fields and ep_row.duration_mins:
+                                ep_secs = int(ep_row.duration_mins) * 60
+                            if 'plot' in ep_fields and ep_row.overview:
+                                ep_plot = ep_row.overview
+                            if 'name' in ep_fields and ep_row.name:
+                                ep_name = ep_row.name
+                            if 'poster' in ep_fields and ep_row.still_path:
+                                ep_cover = "https://image.tmdb.org/t/p/w500" + ep_row.still_path
+                            if 'rating' in ep_fields and ep_row.vote_average is not None:
+                                ep_rating = float(ep_row.vote_average)
+                                try:
+                                    ep_rating_5based = int(min(5, max(0, round((ep_rating or 0.0) / 2.0))))
+                                except Exception:
+                                    ep_rating_5based = 0
         except Exception:
             pass
         s["episodes_by_season"][str(season)].append(
             {
                 "id": ep_id,
-                "title": ep_code,
+                "title": ep_name,
                 "episode_num": int(episode),
                 "season": int(season),
                 "container_extension": "mp4",
+                "added": str(now_ts()),
                 "info": {
-                    "movie_image": cover,
-                    "plot": "",
+                    "movie_image": ep_cover,
+                    "plot": ep_plot,
                     "duration": str(ep_secs),
                     "duration_secs": str(ep_secs),
                     "duration_fmt": _fmt_hhmmss(ep_secs),
+                    "rating": ep_rating,
+                    "rating_5based": ep_rating_5based,
                 },
                 "direct_source": make_direct_video(base_url, it.url),
             }
         )
+
+    ep_re = re.compile(r"E(\d+)$", re.I)
+    
+    def _episode_num(title: str) -> int:
+        m = ep_re.search(title or "")
+        return int(m.group(1)) if m else 0
+
+    for sm in series_map.values():
+        for k, eps in sm.get("episodes_by_season", {}).items():
+            eps.sort(key=lambda e: _episode_num(str(e.get("title", ""))))
+    return series_map, cat_map
 
     ep_re = re.compile(r"E(\d+)$", re.I)
     
@@ -668,9 +976,9 @@ def build_xtream_cache(base_url: str, xt_config: Dict[str, Any]) -> Dict[str, An
     movie_items += m_movies
     series_items += m_series
 
-    live_streams, live_cats = build_live_streams(base_url, live_items)
-    vod_streams, vod_cats = build_vod_streams(base_url, movie_items)
-    series_map, series_cats = build_series_collections(base_url, series_items)
+    live_streams, live_cats = build_live_streams(base_url, live_items, xt_config)
+    vod_streams, vod_cats = build_vod_streams(base_url, movie_items, xt_config)
+    series_map, series_cats = build_series_collections(base_url, series_items, xt_config)
 
     cache = {
         "live_streams": live_streams,
@@ -837,7 +1145,7 @@ def xmltv_from_cache(cache: Optional[Dict[str, Any]]) -> str:
 
 
 # ====== VOD INFO ======
-def build_vod_info(base_url: str, vod_id: str, all_items: Iterable[M3UItem]) -> Dict[str, Any]:
+def build_vod_info(base_url: str, vod_id: str, all_items: Iterable[M3UItem], xt_config: Dict[str, Any]) -> Dict[str, Any]:
     chosen: Optional[M3UItem] = None
     for it in all_items:
         mid = try_extract_movie_id(it.url)
@@ -853,57 +1161,85 @@ def build_vod_info(base_url: str, vod_id: str, all_items: Iterable[M3UItem]) -> 
         from fastapi import HTTPException
         raise HTTPException(404, "VOD non trovato")
 
+    st = config.load_settings()
+    tmdb_cfg = (st.get('tmdb') or {})
+    lang = tmdb_cfg.get('language') or 'it-IT'
+    mv_fields = set(xt_config.get('export_movie_fields') or [])
+
     title = chosen.title.strip()
     year = ""
     m = re.search(r"(19|20)\d{2}", title)
     if m:
         year = m.group(0)
-    else:
-        for key in ("tvg-year", "tvg_year", "year", "releasedate", "release-date"):
-            y = chosen.attrs.get(key, "").strip()
-            m2 = re.search(r"(19|20)\d{2}", y)
-            if m2:
-                year = m2.group(0)
-                break
-
-    title_clean = re.sub(r"\s*\([^()]*\)\s*", " ", title).strip()
-    title_clean = re.sub(r"\s+", " ", title_clean)
-    final_name = f"{title_clean} ({year})" if year else title_clean
 
     duration = _extract_duration(chosen.attrs)
     movie_image = chosen.tvg_logo or ""
     rating_val: Optional[float] = None
+    plot = ""
+    cast = ""
+    director = ""
+    genre = ""
+    release_date = year
+
+    # Get TMDB data
     try:
-        r = chosen.attrs.get("tvg-rating") or chosen.attrs.get("rating")
-        if r:
-            rating_val = float(r)
+        with db.SessionLocal() as s:
+            from app.routers.admin_tmdb import _norm_title_year, _sig_for
+            t, y = _norm_title_year(chosen.title, chosen.attrs or {})
+            sig = _sig_for('movie', t, y)
+            mrow = s.get(db.TMDBMap, sig)
+            if mrow:
+                row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
+                if row:
+                    if 'name' in mv_fields and (row.title or ''):
+                        title = row.title
+                    if 'poster' in mv_fields and (row.poster_path or ''):
+                        movie_image = ("https://image.tmdb.org/t/p/w500" + row.poster_path)
+                    if 'rating' in mv_fields and row.rating is not None:
+                        rating_val = float(row.rating)
+                    if 'duration' in mv_fields and row.runtime_mins:
+                        duration = int(row.runtime_mins) * 60
+                    if 'plot' in mv_fields and row.overview:
+                        plot = row.overview
+                    if 'cast' in mv_fields and row.cast:
+                        cast = row.cast
+                    if 'director' in mv_fields and row.director:
+                        director = row.director
+                    if 'genre' in mv_fields and (row.genres or ''):
+                        genre = str(row.genres)
+                    if 'releasedate' in mv_fields and row.release_date:
+                        release_date = row.release_date
     except Exception:
-        rating_val = None
+        pass
+
+    title_clean = re.sub(r"\s*\([^()]*\)\s*", " ", title).strip()
+    title_clean = re.sub(r"\s+", " ", title_clean)
+    final_name = f"{title_clean} ({year})" if year and not release_date else title_clean
 
     info = {
-        "imdb_id": "",
+        "imdb_id": None,
         "movie_image": movie_image,
-        "genre": "",
-        "plot": "",
-        "cast": "",
-        "director": "",
+        "genre": genre,
+        "plot": plot,
+        "cast": cast,
+        "director": director,
         "rating": rating_val,
-        "releasedate": year,
+        "releasedate": release_date,
         "duration_secs": str(duration),
         "duration": _fmt_hhmmss(duration),
-        "bitrate": "",
-        "kinopoisk_url": "",
-        "episode_run_time": "",
-        "youtube_trailer": "",
-        "actors": "",
+        "bitrate": None,
+        "kinopoisk_url": None,
+        "episode_run_time": None,
+        "youtube_trailer": None,
+        "actors": None,
         "name": final_name,
         "name_o": final_name,
         "cover_big": movie_image,
-        "description": "",
-        "age": "",
-        "rating_mpaa": "",
+        "description": plot,
+        "age": None,
+        "rating_mpaa": None,
         "rating_count_kinopoisk": 0,
-        "country": "",
+        "country": None,
         "backdrop_path": [],
         "audio": [],
         "video": [],
@@ -915,6 +1251,6 @@ def build_vod_info(base_url: str, vod_id: str, all_items: Iterable[M3UItem]) -> 
         "category_id": "",
         "container_extension": "m3u8",
         "custom_sid": "",
-        "direct_source": "",
+        "direct_source": make_direct_video(base_url, chosen.url),
     }
     return {"info": info, "movie_data": movie_data}

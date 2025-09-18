@@ -40,7 +40,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "database_url": "",         # legacy compat; preferire db_profiles
     "db_profiles": [],           # [{name,url}]
     "active_db": "default",
-    "tmdb": { "api_key": "", "language": "it-IT", "movie_fields": [], "series_fields": [], "season_fields": [], "episode_fields": [] },
+    "tmdb": { "api_key": "", "language": "it-IT", "movie_fields": [], "series_fields": [], "season_fields": [], "episode_fields": [], "tmdb_id_extractors": [] },
 }
 
 
@@ -115,6 +115,13 @@ def save_settings(data: Dict[str, Any]) -> None:
     written to disk. Callers should use get_mediaflow_preset/get_stream_resolver_base
     to read effective values.
     """
+    # Se DATABASE_URL è impostato via env, non permettere modifiche da UI
+    if os.environ.get("DATABASE_URL", "").strip():
+        # Rimuovi i campi relativi al DB dal payload in arrivo
+        data.pop("database_url", None)
+        data.pop("db_profiles", None)
+        data.pop("active_db", None)
+        
     st = load_settings()
     out: Dict[str, Any] = {}
     # Preserve arrays, falling back to current ones if not provided
@@ -155,6 +162,7 @@ def save_settings(data: Dict[str, Any]) -> None:
         "series_fields": series_fields,
         "season_fields": season_fields,
         "episode_fields": episode_fields,
+        "tmdb_id_extractors": (tmdb_in.get("tmdb_id_extractors") if isinstance(tmdb_in.get("tmdb_id_extractors"), list) else cur_tmdb.get("tmdb_id_extractors") or []),
     }
     # Forza backend a DB
     out["storage_backend"] = "db"

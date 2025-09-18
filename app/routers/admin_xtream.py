@@ -47,6 +47,7 @@ def admin_xtreams_add(payload: Dict[str, Any]):
         "mixed_list_ids": payload.get("mixed_list_ids") or [],
         "every_hours": int(payload.get("every_hours") or 12),
         "last_refresh": now_ts(),
+        "dedupe_policy": (payload.get("dedupe_policy") or "m3u_order"),
         "export_live_fields": payload.get("export_live_fields") or [],
         "export_movie_fields": payload.get("export_movie_fields") or [],
         "export_series_fields": payload.get("export_series_fields") or [],
@@ -54,7 +55,7 @@ def admin_xtreams_add(payload: Dict[str, Any]):
         "export_episode_fields": payload.get("export_episode_fields") or [],
     }
     items = xtreams()
-    items.append({k: it[k] for k in ("id","name","username","password","resolver_url","every_hours","last_refresh","export_live_fields","export_movie_fields","export_series_fields","export_season_fields","export_episode_fields")})
+    items.append({k: it[k] for k in ("id","name","username","password","resolver_url","every_hours","last_refresh","dedupe_policy","export_live_fields","export_movie_fields","export_series_fields","export_season_fields","export_episode_fields")})
     save_xtreams(items)
     from app import db as _db
     with _db.SessionLocal() as s:
@@ -103,6 +104,11 @@ async def admin_xtreams_update(xt_id: str, request: Request, payload: Dict[str, 
         except (TypeError, ValueError):
             raise HTTPException(400, "Invalid every_hours")
         found["every_hours"] = max(1, ehours)
+    if "dedupe_policy" in payload:
+        val = (payload.get("dedupe_policy") or "m3u_order").strip()
+        if val not in ("m3u_order","random","exclude_low"):
+            raise HTTPException(400, "Invalid dedupe_policy")
+        found["dedupe_policy"] = val
     # export field selections
     if "export_live_fields" in payload:
         v = payload.get("export_live_fields") or []

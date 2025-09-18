@@ -50,18 +50,59 @@ def _refresh_playlist_sync(it: Dict, pid: str) -> None:
                         s.flush()
                     # cancella items precedenti
                     s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pid).delete(synchronize_session=False)
-                    # inserisci nuovi (deduplica per URL)
-                    seen_urls: set[str] = set()
+                    # inserisci nuovi (NO dedupe: alcune voci condividono la stessa URL ma hanno metadati diversi)
                     for mi in parsed_items:
                         u = (mi.url or '').strip()
-                        if not u or u in seen_urls:
+                        if not u:
                             continue
-                        seen_urls.add(u)
+                        # Classificazione e TV triplet
                         kind = 'live'
-                        if try_extract_tv_triplet(u) or guess_is_series(mi):
+                        series_id = None; season = None; episode = None
+                        tv_triplet = try_extract_tv_triplet(u)
+                        if tv_triplet:
+                            kind = 'episode'
+                            series_id, season, episode = tv_triplet
+                        elif guess_is_series(mi):
                             kind = 'series'
                         elif try_extract_movie_id(u) or guess_is_movie(mi):
                             kind = 'movie'
+                        # Normalizza attributi
+                        a = mi.attrs or {}
+                        def _as_int(x):
+                            try:
+                                return int(str(x).strip())
+                            except Exception:
+                                return None
+                        def _as_bool_int(x):
+                            s2 = str(x).strip().lower()
+                            if s2 in ('1','true','yes','on'):
+                                return 1
+                            if s2 in ('0','false','no','off'):
+                                return 0
+                            return None
+                        special = a.get('special') if isinstance(a, dict) else None
+                        h = (special.get('headers') if isinstance(special, dict) else {}) or {}
+                        lic = (special.get('license') if isinstance(special, dict) else {}) or {}
+                        fmt = (special.get('format') if isinstance(special, dict) else None) or None
+                        reqp = 1 if (isinstance(special, dict) and special.get('requires_proxy')) else 0
+                        # Pulisci attrs dai campi mappati in colonne
+                        cleaned_attrs = {}
+                        try:
+                            cleaned_attrs = dict(a)
+                            for k in ['tvg-chno','tvg-id','tvg-name','group-title','radio','karaoke']:
+                                if k in cleaned_attrs:
+                                    cleaned_attrs.pop(k, None)
+                            sp = cleaned_attrs.get('special') if isinstance(cleaned_attrs.get('special'), dict) else None
+                            if sp:
+                                for sk in ['headers','license','format','requires_proxy']:
+                                    sp.pop(sk, None)
+                                if not sp:
+                                    cleaned_attrs.pop('special', None)
+                        except Exception:
+                            cleaned_attrs = a or {}
+
+                        # Duration: only for VOD/episodes; live should have empty duration
+                        dur = None if kind == 'live' else _extract_duration(mi.attrs)
                         s.add(db.PlaylistItem(
                             playlist_id=pid,
                             original_url=u,
@@ -69,9 +110,25 @@ def _refresh_playlist_sync(it: Dict, pid: str) -> None:
                             group_title=mi.group,
                             tvg_id=mi.tvg_id,
                             tvg_logo=mi.tvg_logo,
-                            attrs=mi.attrs or {},
-                            duration_secs=_extract_duration(mi.attrs),
+                            tvg_chno=_as_int(a.get('tvg-chno')),
+                            tvg_name=a.get('tvg-name') or None,
+                            radio=_as_bool_int(a.get('radio')),
+                            karaoke=_as_bool_int(a.get('karaoke')),
+                            headers_user_agent=(h.get('User-Agent') or h.get('user-agent') or None),
+                            headers_referer=(h.get('Referer') or h.get('referer') or None),
+                            headers_origin=(h.get('Origin') or h.get('origin') or None),
+                            headers_cookie=(h.get('Cookie') or h.get('cookie') or None),
+                            license_type=(str(lic.get('type')).lower() if lic.get('type') else None),
+                            clearkey_kid=(lic.get('key_id') or lic.get('kid') or None),
+                            clearkey_key=(lic.get('key') or None),
+                            stream_format=(fmt if fmt in ('hls','dash') else None),
+                            requires_proxy=(reqp if reqp in (0,1) else None),
+                            attrs=cleaned_attrs,
+                            duration_secs=dur,
                             kind=kind,
+                            series_id=series_id,
+                            season=season,
+                            episode=episode,
                         ))
                     s.commit()
             except Exception:

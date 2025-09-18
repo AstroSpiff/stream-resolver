@@ -5,6 +5,52 @@
   <title>Stream Resolver – Admin</title>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <link rel="stylesheet" href="/static/admin/style.css?v=20250906-1"/>
+  <style>
+    .db-tables-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .db-tables-list button {
+      background: #f0f0f0;
+      color: #333;
+      border: 1px solid #ccc;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .db-tables-list button.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    #db-table-content {
+      overflow-x: auto;
+    }
+    #db-table-content table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    #db-table-content th, #db-table-content td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    #db-table-content th {
+      background-color: #f2f2f2;
+    }
+    #db-pagination {
+      margin-top: 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+    #db-pagination button {
+      padding: 6px 10px;
+    }
+  </style>
   <script>
     // Fallback immediato: rende funzionanti i tab anche prima del JS principale
     window.showTab = function(id){
@@ -30,6 +76,7 @@
       <button type="button" class="tab-btn" data-target="tab-m3u" onclick="window.showTab && showTab('tab-m3u')">m3u manager</button>
       <button type="button" class="tab-btn" data-target="tab-xtream" onclick="window.showTab && showTab('tab-xtream')">Xtream manager</button>
       <button type="button" class="tab-btn" data-target="tab-db" onclick="window.showTab && showTab('tab-db')">TMDB</button>
+      <button type="button" class="tab-btn" data-target="tab-browse-db" onclick="window.showTab && showTab('tab-browse-db')">Database</button>
       <button type="button" class="tab-btn" data-target="tab-resolvers" onclick="window.showTab && showTab('tab-resolvers')">Resolvers and Proxy</button>
     </div>
 
@@ -92,6 +139,19 @@
     </section>
     </div>
 
+    <div id="tab-browse-db" class="tab-panel" style="display:none;">
+      <p class="muted">Esplora il contenuto del database.</p>
+      <section>
+        <h2>Tabelle</h2>
+        <div id="db-tables" class="db-tables-list"></div>
+      </section>
+      <section>
+        <h2 id="db-table-name"></h2>
+        <div id="db-pagination"></div>
+        <div id="db-table-content"></div>
+      </section>
+    </div>
+
     <div id="tab-m3u" class="tab-panel" style="display:none;">
     <p class="muted">Gestisci le tue playlist M3U: conversione una tantum e liste salvate con aggiornamento automatico.</p>
     <section>
@@ -145,6 +205,13 @@
         </label>
         <label>Endpoint resolver
           <select id="xt_resolver"></select>
+        </label>
+        <label>Policy duplicati (Xtream)
+          <select id="xt_dedupe">
+            <option value="m3u_order">Numerazione liste M3U</option>
+            <option value="random">Casuale</option>
+            <option value="exclude_low">Escludi lista a bassa priorità</option>
+          </select>
         </label>
         <label><span class="label-cap">Liste LIVE<span class="muted"> – multi-selezione</span></span>
           <select id="xt_live" multiple></select>
@@ -430,13 +497,22 @@
           <summary>Avanzate</summary>
           <div class="grid">
             <label>h_referer
-              <input id="hdr_referer" placeholder="https://..."/>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="hdr_referer" placeholder="https://..."/>
+                <label class="muted" style="white-space:nowrap;"><input type="checkbox" id="hdr_referer_use_db"> Usa metadati DB</label>
+              </div>
             </label>
             <label>h_origin
-              <input id="hdr_origin" placeholder="https://..."/>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="hdr_origin" placeholder="https://..."/>
+                <label class="muted" style="white-space:nowrap;"><input type="checkbox" id="hdr_origin_use_db"> Usa metadati DB</label>
+              </div>
             </label>
             <label>h_user-agent
-              <input id="hdr_useragent" placeholder="Mozilla/5.0 ..."/>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="hdr_useragent" placeholder="Mozilla/5.0 ..."/>
+                <label class="muted" style="white-space:nowrap;"><input type="checkbox" id="hdr_useragent_use_db"> Usa metadati DB</label>
+              </div>
             </label>
             <label>force_playlist_proxy
               <select id="opt_force_playlist_proxy">
@@ -445,14 +521,42 @@
               </select>
             </label>
             <label>key_id (ClearKey)
-              <input id="ck_kid" placeholder="uuid o hex"/>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="ck_kid" placeholder="uuid o hex"/>
+                <label class="muted" style="white-space:nowrap;"><input type="checkbox" id="ck_kid_use_db"> Usa metadati DB</label>
+              </div>
             </label>
             <label>key (ClearKey)
-              <input id="ck_key" placeholder="hex"/>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="ck_key" placeholder="hex"/>
+                <label class="muted" style="white-space:nowrap;"><input type="checkbox" id="ck_key_use_db"> Usa metadati DB</label>
+              </div>
             </label>
           </div>
         </details>
       </fieldset>
+
+      <!-- Link Groups: assistenti senza regex -->
+      <section style="margin-top: 18px;">
+        <h3>Link Groups (assistenti)</h3>
+        <p class="muted">Seleziona domini sorgente raggruppati dal DB per creare velocemente regole senza regex. I live con chiave useranno automaticamente i metadati per‑item dal DB.</p>
+        <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+          <label>Live protetti (CDN+chiave)
+            <select id="lg_live_prot" multiple size="6"></select>
+          </label>
+          <label>Live normali
+            <select id="lg_live_plain" multiple size="6"></select>
+          </label>
+          <label>VOD (film+serie)
+            <select id="lg_vod" multiple size="6"></select>
+          </label>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+          <button id="btnLgReload" type="button" class="secondary">Aggiorna sorgenti</button>
+          <button id="btnLgApply" type="button">Crea policy</button>
+          <span id="lgStatus" class="muted"></span>
+        </div>
+      </section>
 
       <div style="margin-top:8px;">
         <button id="btnSavePolicy">Salva/aggiungi regola</button>
@@ -602,10 +706,37 @@
           <button id="btnSaveCfg" type="button">Salva configurazione</button>
           <span id="cfgStatus" class="muted"></span>
         </div>
-        <div style="display:flex; gap:8px; margin-left:auto;">
-          <button id="btnTmdbStop" type="button" class="danger" style="visibility:hidden;">Stop</button>
-          <button id="btnTmdbUpdate" type="button">Aggiorna metadati</button>
-          <button id="btnTmdbMissing" type="button" class="secondary">Recupera metadati mancanti</button>
+        <div style="margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap: 8px;">
+          <div style="display:flex; gap: 8px;">
+            <button id="btnTmdbAllFull" type="button">Scan completo</button>
+            <button id="btnTmdbAllMissing" type="button" class="secondary">Scan mancanti</button>
+            <button id="btnTmdbIncremental" type="button" class="secondary">Aggiorna nuovi</button>
+          </div>
+          <div style="display:flex; gap: 8px;">
+            <button id="btnTmdbMovieFull" type="button">Scan Film completo</button>
+            <button id="btnTmdbMovieMissing" type="button" class="secondary">Scan Film mancanti</button>
+          </div>
+          <div style="display:flex; gap: 8px;">
+            <button id="btnTmdbSeriesFull" type="button">Scan Serie completo</button>
+            <button id="btnTmdbSeriesMissing" type="button" class="secondary">Scan Serie mancanti</button>
+          </div>
+        </div>
+        <div style="padding-left: 12px;">
+          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start;">
+            <button id="btnTmdbStop" type="button" class="danger" style="visibility:hidden;">Stop</button>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <select id="tmdbClearScope" title="Seleziona cosa cancellare">
+                <option value="all">Tutto</option>
+                <option value="episodes">Solo episodi</option>
+                <option value="series">Solo serie</option>
+                <option value="movies">Solo film</option>
+                <option value="map">Solo map</option>
+                <option value="series+episodes">Serie + Episodi</option>
+              </select>
+              <button id="btnTmdbClear" type="button" class="danger" title="Cancella i dati TMDB selezionati" onclick="window.__tmdbClear && window.__tmdbClear()">Svuota dati TMDB</button>
+              <button id="btnTmdbCleanup" type="button" class="secondary" title="Rimuove gli stati di ingestione TMDB non più referenziati">Pulisci orfani TMDB</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="tmdb-status" style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; margin:6px 0 12px;">
@@ -614,10 +745,43 @@
         </div>
         <div id="tmdbStatusNum" class="muted" style="text-align:right; min-height:18px;"></div>
       </div>
+
+      <hr class="section-sep">
+      <section>
+        <h2>Regole di Estrazione TMDB ID da URL</h2>
+        <p class="muted">
+          Crea regole per estrarre l'ID TMDB direttamente dagli URL dei canali. Le regole vengono applicate in ordine di priorità.
+          La "Regex Dominio" serve a identificare a quali URL applicare la regola (es. <code>my-stream-host\.com</code>).
+          La "Regex Estrazione" deve contenere un singolo gruppo di cattura che isoli l'ID TMDB (es. <code>/movie/(\d+)/</code>).
+        </p>
+        <div class="grid" style="grid-template-columns: 1fr 80px 2fr 2fr auto auto; gap: 8px; align-items: end;">
+          <label>Nome Regola
+            <input id="tmdb_rule_name" placeholder="Nome descrittivo">
+          </label>
+          <label>Priorità
+            <input id="tmdb_rule_priority" type="number" value="100">
+          </label>
+          <label>Regex Dominio
+            <input id="tmdb_rule_domain" placeholder="es. my-stream-host\.com">
+          </label>
+          <label>Regex Estrazione
+            <input id="tmdb_rule_extraction" placeholder="es. /movie/(\d+)/">
+          </label>
+          <label>Tipo
+            <select id="tmdb_rule_media_type">
+              <option value="movie">Film</option>
+              <option value="series">Serie</option>
+            </select>
+          </label>
+          <button id="btnAddTmdbRule" type="button">Aggiungi</button>
+        </div>
+        <div id="tmdb_rules_list" style="margin-top: 16px;"></div>
+      </section>
+
     </section>
     </div>
   </div>
 
-  <script src="/static/admin/admin.js?v=20250906-1"></script>
+  <script src="/static/admin/admin.js?v=20250913-9"></script>
 </body>
 </html>
