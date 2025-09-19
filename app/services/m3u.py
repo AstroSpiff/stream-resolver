@@ -1,25 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os
 import re
 from typing import Dict, List, Optional
 
 import httpx
 
 from app.config import (
-    PLAYLISTS_DIR,
-    PLAYLISTS_INDEX,
     ensure_http,
-    load_settings,
     get_stream_resolver_base,
-    read_json,
-    write_json,
     url_encode,
 )
-from app import config
 from app import db
-from sqlalchemy.exc import OperationalError
 from app.services.xtream import (
     try_extract_movie_id,
     try_extract_tv_triplet,

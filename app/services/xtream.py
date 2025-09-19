@@ -88,7 +88,6 @@ def enc(url: str) -> str:
 XTREAMS_JSON = config.XTREAMS_JSON
 XTREAM_CACHE_DIR = config.XTREAM_CACHE_DIR
 CATEGORY_IDS_JSON = config.CATEGORY_IDS_JSON
-PLAYLISTS_DIR = config.PLAYLISTS_DIR
 
 
 # ====== STORAGE ======
@@ -263,41 +262,29 @@ def parse_m3u(text: str) -> List[M3UItem]:
     return items
 
 
-def _playlist_file(pl_id: str) -> str:
-    return os.path.join(PLAYLISTS_DIR, f"{pl_id}.m3u")
-
-
 def _read_playlist(pl_id: str) -> List[M3UItem]:
-    # Se backend=db, ricostruisci la lista dagli items importati
-    if config.get_storage_backend() == 'db':
-        try:
-            with db.SessionLocal() as s:
-                prow = s.get(db.Playlist, pl_id)
-                porder = getattr(prow, 'order_num', None) if prow else None
-                rows = s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pl_id).all()
-                out: List[M3UItem] = []
-                for r in rows:
-                    out.append(M3UItem(
-                        title=r.title or "",
-                        url=r.original_url,
-                        attrs=r.attrs or {},
-                        group=r.group_title or "",
-                        tvg_id=r.tvg_id or "",
-                        tvg_logo=r.tvg_logo or "",
-                        raw="",
-                        source_playlist_id=pl_id,
-                        source_order=porder,
-                    ))
-                return out
-        except Exception:
-            pass
-    # Fallback: leggi da file m3u salvato
-    path = _playlist_file(pl_id)
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return parse_m3u(f.read())
-    except FileNotFoundError:
-        return []
+        with db.SessionLocal() as s:
+            prow = s.get(db.Playlist, pl_id)
+            porder = getattr(prow, 'order_num', None) if prow else None
+            rows = s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pl_id).all()
+            out: List[M3UItem] = []
+            for r in rows:
+                out.append(M3UItem(
+                    title=r.title or "",
+                    url=r.original_url,
+                    attrs=r.attrs or {},
+                    group=r.group_title or "",
+                    tvg_id=r.tvg_id or "",
+                    tvg_logo=r.tvg_logo or "",
+                    raw="",
+                    source_playlist_id=pl_id,
+                    source_order=porder,
+                ))
+            return out
+    except Exception:
+        logger.exception("Errore nella lettura della playlist %s dal database", pl_id)
+    return []
 
 
 # ====== CLASSIFICATION ======

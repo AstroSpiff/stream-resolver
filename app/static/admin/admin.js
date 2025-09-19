@@ -697,9 +697,7 @@ row.addEventListener('drop', onPlDrop);
 const rowMain = document.createElement("div");
 rowMain.className = "row-main";
 row.appendChild(rowMain); // Helpers
-const path = `/lists/${it.id}.m3u`;
-const base = (it.resolver_url && it.resolver_url.trim()) ? it.resolver_url.trim().replace(/\/+$/, '') : canonicalServerBase();
-const fullLink = base.replace(/\/$/, '') + path; // 1) Titolo: Nome lista [✎] – Ultimo refresh
+// 1) Titolo: Nome lista [✎] – Ultimo refresh
 const titleLine = document.createElement('div');
 titleLine.className = 'line';
 // Drag handle indicator

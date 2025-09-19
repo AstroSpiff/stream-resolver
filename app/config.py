@@ -13,20 +13,17 @@ logger = logging.getLogger(__name__)
 APP_DIR = os.environ.get("APP_DIR", "/app")
 STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(APP_DIR, "app", "static"))
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
-PLAYLISTS_DIR = os.path.join(CONFIG_DIR, "playlists")
 USER_RESOLVERS_DIR = os.path.join(CONFIG_DIR, "resolvers")
 XTREAMS_JSON = os.path.join(CONFIG_DIR, "xtreams.json")
 XTREAM_CACHE_DIR = os.path.join(CONFIG_DIR, "xtream_cache")
 CATEGORY_IDS_JSON = os.path.join(CONFIG_DIR, "category_ids.json")
 
 os.makedirs(CONFIG_DIR, exist_ok=True)
-os.makedirs(PLAYLISTS_DIR, exist_ok=True)
 os.makedirs(XTREAM_CACHE_DIR, exist_ok=True)
 os.makedirs(USER_RESOLVERS_DIR, exist_ok=True)
 
 # Files
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
-PLAYLISTS_INDEX = os.path.join(CONFIG_DIR, "playlists.json")
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "mediaflow_url": "",

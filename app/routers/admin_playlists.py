@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Path
 from sqlalchemy import select
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app import config
@@ -207,144 +206,132 @@ async def admin_update_playlist(pid: str = Path(...), data: PlaylistUpdate = Bod
     if data.refresh:
         try:
             src = await m3u.fetch_text(it["url"])
-            # In backend DB: importa soltanto nel DB (niente conversione/scrittura file)
-            if config.get_storage_backend() == 'db':
-                from app.services.xtream import parse_m3u, guess_is_series, guess_is_movie, try_extract_movie_id, try_extract_tv_triplet
-                from app import db
-                items = parse_m3u(src)
-                with db.SessionLocal() as s:
-                    p = s.get(db.Playlist, pid)
-                    if not p:
-                        p = db.Playlist(id=pid, name=it.get('name') or '', url=it.get('url') or '', mode=it.get('mode') or 'film')
-                        s.add(p)
-                        s.flush()
-                    s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pid).delete(synchronize_session=False)
-                    for mi in items:
-                        u = (mi.url or '').strip()
-                        if not u:
-                            continue
-                        kind = 'live'
-                        series_id, season, episode = None, None, None
-                        tv_triplet = try_extract_tv_triplet(u)
-                        if tv_triplet:
-                            kind = 'episode'
-                            series_id, season, episode = tv_triplet
-                        elif guess_is_series(mi):
-                            kind = 'series'
-                        elif try_extract_movie_id(u) or guess_is_movie(mi):
-                            kind = 'movie'
+            from app.services.xtream import parse_m3u, guess_is_series, guess_is_movie, try_extract_movie_id, try_extract_tv_triplet
+            from app import db
+            items = parse_m3u(src)
+            with db.SessionLocal() as s:
+                p = s.get(db.Playlist, pid)
+                if not p:
+                    p = db.Playlist(id=pid, name=it.get('name') or '', url=it.get('url') or '', mode=it.get('mode') or 'film')
+                    s.add(p)
+                    s.flush()
+                s.query(db.PlaylistItem).filter(db.PlaylistItem.playlist_id == pid).delete(synchronize_session=False)
+                for mi in items:
+                    u = (mi.url or '').strip()
+                    if not u:
+                        continue
+                    kind = 'live'
+                    series_id, season, episode = None, None, None
+                    tv_triplet = try_extract_tv_triplet(u)
+                    if tv_triplet:
+                        kind = 'episode'
+                        series_id, season, episode = tv_triplet
+                    elif guess_is_series(mi):
+                        kind = 'series'
+                    elif try_extract_movie_id(u) or guess_is_movie(mi):
+                        kind = 'movie'
 
-                        # Normalizza attributi noti
-                        a = mi.attrs or {}
-                        def _as_int(x):
-                            try:
-                                return int(str(x).strip())
-                            except Exception:
-                                return None
-                        def _as_bool_int(x):
-                            s2 = str(x).strip().lower()
-                            if s2 in ('1','true','yes','on'):
-                                return 1
-                            if s2 in ('0','false','no','off'):
-                                return 0
+                    # Normalizza attributi noti
+                    a = mi.attrs or {}
+                    def _as_int(x):
+                        try:
+                            return int(str(x).strip())
+                        except Exception:
                             return None
-                        special = a.get('special') if isinstance(a, dict) else None
-                        # Headers/licenza
-                        h = (special.get('headers') if isinstance(special, dict) else {}) or {}
-                        lic = (special.get('license') if isinstance(special, dict) else {}) or {}
-                        fmt = (special.get('format') if isinstance(special, dict) else None) or None
-                        reqp = 1 if (isinstance(special, dict) and special.get('requires_proxy')) else 0
-                        # Pulisci dall'attrs i campi normalizzati in colonne
-                        cleaned_attrs = {}
-                        try:
-                            cleaned_attrs = dict(a)
-                            for k in ['tvg-chno','tvg-id','tvg-name','group-title','radio','karaoke']:
-                                if k in cleaned_attrs:
-                                    cleaned_attrs.pop(k, None)
-                            # Se special presente, rimuovi i sotto-campi già mappati in colonne mantenendo eventuali altri
-                            sp = cleaned_attrs.get('special') if isinstance(cleaned_attrs.get('special'), dict) else None
-                            if sp:
-                                for sk in ['headers','license','format','requires_proxy']:
-                                    sp.pop(sk, None)
-                                # Rimuovi special vuoto
-                                if not sp:
-                                    cleaned_attrs.pop('special', None)
-                        except Exception:
-                            cleaned_attrs = a or {}
+                    def _as_bool_int(x):
+                        s2 = str(x).strip().lower()
+                        if s2 in ('1','true','yes','on'):
+                            return 1
+                        if s2 in ('0','false','no','off'):
+                            return 0
+                        return None
+                    special = a.get('special') if isinstance(a, dict) else None
+                    # Headers/licenza
+                    h = (special.get('headers') if isinstance(special, dict) else {}) or {}
+                    lic = (special.get('license') if isinstance(special, dict) else {}) or {}
+                    fmt = (special.get('format') if isinstance(special, dict) else None) or None
+                    reqp = 1 if (isinstance(special, dict) and special.get('requires_proxy')) else 0
+                    # Pulisci dall'attrs i campi normalizzati in colonne
+                    cleaned_attrs = {}
+                    try:
+                        cleaned_attrs = dict(a)
+                        for k in ['tvg-chno','tvg-id','tvg-name','group-title','radio','karaoke']:
+                            if k in cleaned_attrs:
+                                cleaned_attrs.pop(k, None)
+                        # Se special presente, rimuovi i sotto-campi già mappati in colonne mantenendo eventuali altri
+                        sp = cleaned_attrs.get('special') if isinstance(cleaned_attrs.get('special'), dict) else None
+                        if sp:
+                            for sk in ['headers','license','format','requires_proxy']:
+                                sp.pop(sk, None)
+                            # Rimuovi special vuoto
+                            if not sp:
+                                cleaned_attrs.pop('special', None)
+                    except Exception:
+                        cleaned_attrs = a or {}
 
-                        s.add(db.PlaylistItem(
-                            playlist_id=pid,
-                            original_url=u,
-                            title=mi.title,
-                            group_title=mi.group,
-                            tvg_id=mi.tvg_id,
-                            tvg_logo=mi.tvg_logo,
-                            tvg_chno=_as_int(a.get('tvg-chno')),
-                            tvg_name=a.get('tvg-name') or None,
-                            radio=_as_bool_int(a.get('radio')),
-                            karaoke=_as_bool_int(a.get('karaoke')),
-                            headers_user_agent=(h.get('User-Agent') or h.get('user-agent') or None),
-                            headers_referer=(h.get('Referer') or h.get('referer') or None),
-                            headers_origin=(h.get('Origin') or h.get('origin') or None),
-                            headers_cookie=(h.get('Cookie') or h.get('cookie') or None),
-                            license_type=(str(lic.get('type')).lower() if lic.get('type') else None),
-                            clearkey_kid=(lic.get('key_id') or lic.get('kid') or None),
-                            clearkey_key=(lic.get('key') or None),
-                            stream_format=(fmt if fmt in ('hls','dash') else None),
-                            requires_proxy=(reqp if reqp in (0,1) else None),
-                            attrs=cleaned_attrs,
-                            kind=kind,
-                            series_id=series_id,
-                            season=season,
-                            episode=episode,
-                        ))
-                        # Upsert ingest status (movie/series/episode) for incremental TMDB processing
-                        try:
-                            from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                            now = config.now_ts()
-                            if kind == 'movie':
-                                t_norm, y = _norm_title_year(mi.title, mi.attrs or {})
-                                sig = _sig_for('movie', t_norm, y)
-                                row_st = s.execute(select(db.TMDBIngestStatus).where(db.TMDBIngestStatus.key_type=='movie', db.TMDBIngestStatus.movie_sig==sig)).scalar_one_or_none()
-                                if not row_st:
-                                    s.add(db.TMDBIngestStatus(key_type='movie', movie_sig=sig, title_norm=t_norm, year=y or None, status='pending', first_seen_ts=now, last_seen_ts=now))
-                                else:
-                                    row_st.last_seen_ts = now
-                            elif kind == 'series':
-                                t_norm, y = _norm_title_year(mi.title, mi.attrs or {})
-                                sig = _sig_for('series', t_norm, y)
-                                row_st = s.execute(select(db.TMDBIngestStatus).where(db.TMDBIngestStatus.key_type=='series', db.TMDBIngestStatus.series_sig==sig)).scalar_one_or_none()
-                                if not row_st:
-                                    s.add(db.TMDBIngestStatus(key_type='series', series_sig=sig, title_norm=t_norm, year=y or None, status='pending', first_seen_ts=now, last_seen_ts=now))
-                                else:
-                                    row_st.last_seen_ts = now
-                            elif kind == 'episode' and series_id is not None and season is not None and episode is not None:
-                                t_norm, _y = _norm_title_year(mi.title, mi.attrs or {})
-                                sig = _sig_for('series', t_norm, None)
-                                row_st = s.execute(select(db.TMDBIngestStatus).where(
-                                    db.TMDBIngestStatus.key_type=='episode',
-                                    db.TMDBIngestStatus.series_sig==sig,
-                                    db.TMDBIngestStatus.season==season,
-                                    db.TMDBIngestStatus.episode==episode,
-                                )).scalar_one_or_none()
-                                if not row_st:
-                                    s.add(db.TMDBIngestStatus(key_type='episode', series_sig=sig, season=season, episode=episode, title_norm=t_norm, year=None, status='pending', first_seen_ts=now, last_seen_ts=now))
-                                else:
-                                    row_st.last_seen_ts = now
-                        except Exception:
-                            pass
-                    s.commit()
-                it["last_refresh"] = config.now_ts()
-            else:
-                # Modalità legacy JSON: conversione e scrittura file .m3u
-                src_settings = config.load_settings()
-                if it.get("resolver_url"):
-                    src_settings = {**src_settings, "resolvers": [{"name": "override", "url": it["resolver_url"]}]}
-                out = m3u.convert_playlist_text(src, it["mode"], src_settings)
-                out_path = os.path.join(config.PLAYLISTS_DIR, f"{pid}.m3u")
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(out)
-                it["last_refresh"] = config.now_ts()
+                    s.add(db.PlaylistItem(
+                        playlist_id=pid,
+                        original_url=u,
+                        title=mi.title,
+                        group_title=mi.group,
+                        tvg_id=mi.tvg_id,
+                        tvg_logo=mi.tvg_logo,
+                        tvg_chno=_as_int(a.get('tvg-chno')),
+                        tvg_name=a.get('tvg-name') or None,
+                        radio=_as_bool_int(a.get('radio')),
+                        karaoke=_as_bool_int(a.get('karaoke')),
+                        headers_user_agent=(h.get('User-Agent') or h.get('user-agent') or None),
+                        headers_referer=(h.get('Referer') or h.get('referer') or None),
+                        headers_origin=(h.get('Origin') or h.get('origin') or None),
+                        headers_cookie=(h.get('Cookie') or h.get('cookie') or None),
+                        license_type=(str(lic.get('type')).lower() if lic.get('type') else None),
+                        clearkey_kid=(lic.get('key_id') or lic.get('kid') or None),
+                        clearkey_key=(lic.get('key') or None),
+                        stream_format=(fmt if fmt in ('hls','dash') else None),
+                        requires_proxy=(reqp if reqp in (0,1) else None),
+                        attrs=cleaned_attrs,
+                        kind=kind,
+                        series_id=series_id,
+                        season=season,
+                        episode=episode,
+                    ))
+                    # Upsert ingest status (movie/series/episode) for incremental TMDB processing
+                    try:
+                        from app.routers.admin_tmdb import _norm_title_year, _sig_for
+                        now = config.now_ts()
+                        if kind == 'movie':
+                            t_norm, y = _norm_title_year(mi.title, mi.attrs or {})
+                            sig = _sig_for('movie', t_norm, y)
+                            row_st = s.execute(select(db.TMDBIngestStatus).where(db.TMDBIngestStatus.key_type=='movie', db.TMDBIngestStatus.movie_sig==sig)).scalar_one_or_none()
+                            if not row_st:
+                                s.add(db.TMDBIngestStatus(key_type='movie', movie_sig=sig, title_norm=t_norm, year=y or None, status='pending', first_seen_ts=now, last_seen_ts=now))
+                            else:
+                                row_st.last_seen_ts = now
+                        elif kind == 'series':
+                            t_norm, y = _norm_title_year(mi.title, mi.attrs or {})
+                            sig = _sig_for('series', t_norm, y)
+                            row_st = s.execute(select(db.TMDBIngestStatus).where(db.TMDBIngestStatus.key_type=='series', db.TMDBIngestStatus.series_sig==sig)).scalar_one_or_none()
+                            if not row_st:
+                                s.add(db.TMDBIngestStatus(key_type='series', series_sig=sig, title_norm=t_norm, year=y or None, status='pending', first_seen_ts=now, last_seen_ts=now))
+                            else:
+                                row_st.last_seen_ts = now
+                        elif kind == 'episode' and series_id is not None and season is not None and episode is not None:
+                            t_norm, _y = _norm_title_year(mi.title, mi.attrs or {})
+                            sig = _sig_for('series', t_norm, None)
+                            row_st = s.execute(select(db.TMDBIngestStatus).where(
+                                db.TMDBIngestStatus.key_type=='episode',
+                                db.TMDBIngestStatus.series_sig==sig,
+                                db.TMDBIngestStatus.season==season,
+                                db.TMDBIngestStatus.episode==episode,
+                            )).scalar_one_or_none()
+                            if not row_st:
+                                s.add(db.TMDBIngestStatus(key_type='episode', series_sig=sig, season=season, episode=episode, title_norm=t_norm, year=None, status='pending', first_seen_ts=now, last_seen_ts=now))
+                            else:
+                                row_st.last_seen_ts = now
+                    except Exception:
+                        pass
+                s.commit()
+            it["last_refresh"] = config.now_ts()
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Errore refresh: {e}")
 
@@ -390,10 +377,6 @@ def admin_delete_playlist(pid: str):
     items = m3u.read_playlists_index()
     new_items = [x for x in items if x.get("id") != pid]
     m3u.write_playlists_index(new_items)
-    try:
-        os.remove(os.path.join(config.PLAYLISTS_DIR, f"{pid}.m3u"))
-    except FileNotFoundError:
-        pass
     # Backend DB: rimuovi playlist e items e ripulisci stati TMDB orfani
     if config.get_storage_backend() == 'db':
         try:
@@ -455,11 +438,3 @@ def admin_delete_playlist(pid: str):
             # Non bloccare l'API se la pulizia fallisce
             pass
     return {"ok": True}
-
-
-@router.get("/lists/{pid}.m3u")
-def serve_playlist(pid: str):
-    path = os.path.join(config.PLAYLISTS_DIR, f"{pid}.m3u")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Playlist non trovata")
-    return FileResponse(path, media_type="audio/x-mpegurl", filename=f"{pid}.m3u")
