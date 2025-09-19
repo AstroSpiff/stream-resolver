@@ -266,8 +266,54 @@ def get_db():
             pass
 
 
+def _ensure_database_exists():
+    """Ensure the database exists, create it if it doesn't."""
+    from urllib.parse import urlparse
+    
+    try:
+        db_url = config.get_database_url()
+        parsed = urlparse(db_url)
+        
+        # Extract database name from the URL
+        database_name = parsed.path.lstrip('/')
+        if not database_name:
+            logger.warning("No database name found in URL, skipping database creation check")
+            return
+        
+        # Create a connection to the PostgreSQL server (not to the specific database)
+        # Connect to 'postgres' database which should always exist
+        server_url = f"{parsed.scheme}://{parsed.netloc}/postgres"
+        
+        # Create engine for server connection
+        server_engine = create_engine(server_url, isolation_level="AUTOCOMMIT")
+        
+        with server_engine.connect() as conn:
+            # Check if database exists
+            result = conn.execute(text(
+                "SELECT 1 FROM pg_database WHERE datname = :db_name"
+            ), {"db_name": database_name})
+            
+            if not result.fetchone():
+                # Database doesn't exist, create it
+                logger.info(f"Database '{database_name}' doesn't exist, creating it...")
+                conn.execute(text(f'CREATE DATABASE "{database_name}"'))
+                logger.info(f"Database '{database_name}' created successfully")
+            else:
+                logger.info(f"Database '{database_name}' already exists")
+        
+        server_engine.dispose()
+        
+    except Exception as e:
+        logger.warning(f"Could not ensure database exists: {e}")
+        # Continue anyway - maybe it's not PostgreSQL or database already exists
+
+
 def init_db():
     try:
+        # First, ensure the database exists
+        _ensure_database_exists()
+        
+        # Then create all tables
         Base.metadata.create_all(Engine)
         logger.info("DB initialized and tables ensured.")
         _ensure_new_columns()

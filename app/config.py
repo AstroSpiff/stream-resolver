@@ -7,11 +7,21 @@ import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed, skip loading .env file
+    pass
+
 logger = logging.getLogger(__name__)
+
+
 
 # Directories
 APP_DIR = os.environ.get("APP_DIR", "/app")
-STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(APP_DIR, "app", "static"))
+STATIC_DIR = os.environ.get("STATIC_DIR", os.path.join(APP_DIR, "static"))
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/app/config")
 USER_RESOLVERS_DIR = os.path.join(CONFIG_DIR, "resolvers")
 XTREAMS_JSON = os.path.join(CONFIG_DIR, "xtreams.json")
