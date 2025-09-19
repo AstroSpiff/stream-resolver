@@ -20,7 +20,55 @@ from app import db
 from sqlalchemy.exc import OperationalError
 import logging
 
+from app.services import policies as pol
+
 logger = logging.getLogger(__name__)
+
+
+TV_ENDPOINTS = {"/tv", "/tv.m3u8", "/tv.mp4"}
+VIDEO_ENDPOINTS = {"/video", "/video.m3u8", "/video.mp4"}
+_POLICY_EXT_CACHE: Dict[Tuple[str, str], Optional[str]] = {}
+
+
+def normalize_endpoint(path: Optional[str]) -> str:
+    return (path or "").strip().lower().rstrip('/')
+
+
+def is_tv_endpoint(path: Optional[str]) -> bool:
+    return normalize_endpoint(path) in TV_ENDPOINTS
+
+
+def is_video_endpoint(path: Optional[str]) -> bool:
+    return normalize_endpoint(path) in VIDEO_ENDPOINTS
+
+
+def unwrap_internal_url(url: str, base_url: str, max_depth: int = 5) -> str:
+    """Estrae l'URL originale da catene annidate /tv?u=/video?u=... limitando la profondità."""
+    current = url
+    seen = set()
+    try:
+        base = urllib.parse.urlparse(base_url)
+    except Exception:
+        return current
+    for _ in range(max_depth):
+        try:
+            parsed = urllib.parse.urlparse(current)
+        except Exception:
+            break
+        if parsed.netloc != base.netloc:
+            break
+        qs = urllib.parse.parse_qs(parsed.query)
+        if "u" not in qs:
+            break
+        endpoint = normalize_endpoint(parsed.path)
+        if endpoint not in TV_ENDPOINTS and endpoint not in VIDEO_ENDPOINTS:
+            break
+        candidate = (qs.get("u") or [""])[0]
+        if not candidate or candidate in seen:
+            break
+        seen.add(candidate)
+        current = candidate
+    return current
 
 
 # ====== SMALL UTILS ======
@@ -113,7 +161,6 @@ def parse_m3u(text: str) -> List[M3UItem]:
     lines = [l.rstrip("\n") for l in text.splitlines()]
     last_inf: Optional[Tuple[Dict[str, Any], str]] = None
     # Buffer per righe speciali (KODIPROP/EXTVLCOPT) da associare alla prossima URL
-    special_buf: Dict[str, Any] = {}
     special_headers: Dict[str, str] = {}
     special_license: Dict[str, Any] = {}
     for i, line in enumerate(lines):
@@ -211,7 +258,6 @@ def parse_m3u(text: str) -> List[M3UItem]:
                 )
                 last_inf = None
                 # Reset buffer per prossima entry
-                special_buf = {}
                 special_headers = {}
                 special_license = {}
     return items
@@ -412,48 +458,74 @@ def _fmt_hhmmss(secs: int) -> str:
 
 
 # ====== DIRECT SOURCE ======
-def _already_direct(url: str, base: str, endpoint: str) -> bool:
+
+
+def _ext_from_url(url: str) -> Optional[str]:
     try:
-        u = urllib.parse.urlparse(url)
-        b = urllib.parse.urlparse(base)
-        qs = urllib.parse.parse_qs(u.query)
-        return u.netloc == b.netloc and u.path.rstrip("/") == f"/{endpoint}" and "u" in qs
+        path = urllib.parse.urlparse(url).path
+        ext = os.path.splitext(path)[1]
+        if ext:
+            return ext[1:].lower()
     except Exception:
-        return False
+        return None
+    return None
+
+
+def _preferred_extension(original_url: str, kind: str) -> Optional[str]:
+    host = ""
+    try:
+        host = (urllib.parse.urlparse(original_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    key = (host, kind.lower())
+    if key in _POLICY_EXT_CACHE:
+        return _POLICY_EXT_CACHE[key]
+    ext: Optional[str] = None
+    try:
+        policy = pol.pick_policy(original_url, kind, is_local=False)
+        if policy:
+            mode = (policy.get("remote_mode") or policy.get("local_mode") or "").lower()
+            if mode == "mediaflow":
+                mf = policy.get("mediaflow") or {}
+                endpoint = (mf.get("endpoint") or "").strip().lower()
+                path = (mf.get("path") or "").strip()
+                if endpoint == "proxy" and path:
+                    tail = path.split("/")[-1]
+                    if "." in tail:
+                        ext = tail.rsplit(".", 1)[-1].lower()
+                if not ext:
+                    ext = "m3u8"
+            elif mode == "direct":
+                ext = _ext_from_url(original_url)
+            else:
+                ext = None
+    except Exception:
+        ext = None
+    _POLICY_EXT_CACHE[key] = ext
+    return ext
+
+
+def _prefer_or_default(ext: Optional[str], fallback: str) -> str:
+    if not ext:
+        return fallback
+    ext = ext.lower().lstrip('.')
+    if not ext or ext == 'ts':
+        return fallback
+    return ext
 
 
 def make_direct_video(base_url: str, original_url: str) -> str:
-    if _already_direct(original_url, base_url, "video"):
-        return original_url
-    # Se è già un link /tv?u=... dello stesso host, estrai l'URL interno
-    try:
-        u = urllib.parse.urlparse(original_url)
-        b = urllib.parse.urlparse(base_url)
-        qs = urllib.parse.parse_qs(u.query)
-        if u.netloc == b.netloc and u.path.rstrip("/") in ("/video", "/tv") and "u" in qs:
-            inner = qs.get("u", [""])[0]
-            if inner:
-                return f"{base_url}/video?u={enc(inner)}"
-    except Exception:
-        pass
-    return f"{base_url}/video?u={enc(original_url)}"
+    inner = unwrap_internal_url(original_url, base_url)
+    ext = _prefer_or_default(_preferred_extension(inner, "video"), "m3u8")
+    endpoint = "video" if ext in ("", "ts") else f"video.{ext}"
+    return f"{base_url}/{endpoint}?u={enc(inner)}"
 
 
 def make_direct_live(base_url: str, original_url: str) -> str:
-    if _already_direct(original_url, base_url, "tv"):
-        return original_url
-    # Se è già un link /video?u=... dello stesso host, estrai l'URL interno
-    try:
-        u = urllib.parse.urlparse(original_url)
-        b = urllib.parse.urlparse(base_url)
-        qs = urllib.parse.parse_qs(u.query)
-        if u.netloc == b.netloc and u.path.rstrip("/") in ("/video", "/tv") and "u" in qs:
-            inner = qs.get("u", [""])[0]
-            if inner:
-                return f"{base_url}/tv?u={enc(inner)}"
-    except Exception:
-        pass
-    return f"{base_url}/tv?u={enc(original_url)}"
+    inner = unwrap_internal_url(original_url, base_url)
+    ext = _prefer_or_default(_preferred_extension(inner, "tv"), "m3u8")
+    endpoint = "tv" if ext in ("", "ts") else f"tv.{ext}"
+    return f"{base_url}/{endpoint}?u={enc(inner)}"
 
 
 # ====== DURATE ======
@@ -607,33 +679,34 @@ def build_vod_streams(base_url: str, m3us: Iterable[M3UItem], xt_config: Dict[st
         name = it.title.strip()
         stream_icon = it.tvg_logo or ""
         rating_val = None
-        # Prefer TMDB metadata se presente
+        tmdb_movie = None
         try:
             with db.SessionLocal() as s:
                 mrow = s.get(db.TMDBMap, key)
                 if mrow:
-                    row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
-                    if row:
-                        if 'name' in mv_fields and (row.title or ''):
-                            name = row.title
-                        if 'poster' in mv_fields and (row.poster_path or ''):
-                            stream_icon = ("https://image.tmdb.org/t/p/w500" + row.poster_path)
-                        if 'rating' in mv_fields and row.rating is not None:
-                            rating_val = float(row.rating)
+                    tmdb_movie = s.get(db.TMDBMovie, (mrow.tmdb_id, lang))
         except Exception:
-            pass
+            tmdb_movie = None
+
+        if tmdb_movie:
+            if 'name' in mv_fields and (tmdb_movie.title or ''):
+                name = tmdb_movie.title
+            if 'poster' in mv_fields and (tmdb_movie.poster_path or ''):
+                stream_icon = "https://image.tmdb.org/t/p/w500" + tmdb_movie.poster_path
+            if 'rating' in mv_fields and tmdb_movie.rating is not None:
+                try:
+                    rating_val = float(tmdb_movie.rating)
+                except Exception:
+                    rating_val = None
+
         # Durata: preferisci TMDB runtime se selezionato, poi EXTINF
-        dur_secs = _extract_duration(it.attrs)
-        try:
-            if 'duration' in mv_fields:
-                with db.SessionLocal() as s:
-                    mrow = s.get(db.TMDBMap, key)
-                    if mrow:
-                        row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
-                        if row and row.runtime_mins:
-                            dur_secs = int(row.runtime_mins) * 60
-        except Exception:
-            pass
+        base_duration = _extract_duration(it.attrs)
+        dur_secs = base_duration
+        if 'duration' in mv_fields and tmdb_movie and tmdb_movie.runtime_mins:
+            try:
+                dur_secs = int(tmdb_movie.runtime_mins) * 60
+            except Exception:
+                dur_secs = base_duration
         if rating_val is None:
             rating_raw = (it.attrs.get("tvg-rating") or it.attrs.get("rating") or "").strip()
             try:
@@ -679,6 +752,7 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
     sr_fields = set(xt_config.get('export_series_fields') or [])
     ep_fields = set(xt_config.get('export_episode_fields') or [])
     season_fields = set(xt_config.get('export_season_fields') or [])
+    from app.routers.admin_tmdb import _norm_title_year, _sig_for
 
     policy = (xt_config.get('dedupe_policy') or 'm3u_order').strip()
     # Seleziona una sola variante per episodio in base alla policy
@@ -725,32 +799,47 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
         name = re.sub(r"\bS(\d{1,2})E(\d{1,2})\b", "", it.title, flags=re.I).strip() or f"Serie {sid}"
         cover = it.tvg_logo or ""
         plot = ""
-        rating = None
-        seasons_data = {}
-        # Try TMDB for series-level metadata
+        rating: Optional[float] = None
+        seasons_data: Dict[int, Dict[str, Any]] = {}
+        norm_title, _ = _norm_title_year(it.title, it.attrs or {})
+        series_sig = _sig_for('series', norm_title, None)
+
+        ep_code = f"S{season:02d}E{episode:02d}"
+        ep_id = str(crc32_num(f"{sid}:{season}:{episode}"))
+        ep_secs = _extract_duration(it.attrs)
+        ep_plot = ""
+        ep_name = ep_code
+        ep_cover: Optional[str] = None
+        ep_rating: Optional[float] = None
+        ep_rating_5based: Optional[int] = None
+
         try:
             with db.SessionLocal() as s:
-                from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                t, _y = _norm_title_year(it.title, it.attrs or {})
-                sig = _sig_for('series', t, None)
-                mrow = s.get(db.TMDBMap, sig)
+                mrow = s.get(db.TMDBMap, series_sig)
                 if mrow:
-                    row = s.get(db.TMDBSeries, {"tmdb_id": mrow.tmdb_id, "language": lang})
-                    if row:
-                        if 'name' in sr_fields and (row.name or ''):
-                            name = row.name
-                        if 'poster' in sr_fields and (row.poster_path or ''):
-                            cover = ("https://image.tmdb.org/t/p/w500" + row.poster_path)
-                        if 'plot' in sr_fields and (row.overview or ''):
-                            plot = row.overview
-                        if 'rating' in sr_fields and row.rating is not None:
-                            rating = float(row.rating)
-                        # Use dedicated seasons table only (seasons_json deprecated)
+                    series_row = s.get(db.TMDBSeries, (mrow.tmdb_id, lang))
+                    if series_row:
+                        if 'name' in sr_fields and (series_row.name or ''):
+                            name = series_row.name
+                        if 'poster' in sr_fields and (series_row.poster_path or ''):
+                            cover = "https://image.tmdb.org/t/p/w500" + series_row.poster_path
+                        if 'plot' in sr_fields and (series_row.overview or ''):
+                            plot = series_row.overview
+                        if 'rating' in sr_fields and series_row.rating is not None:
+                            try:
+                                rating = float(series_row.rating)
+                            except Exception:
+                                rating = None
+                    if season_fields:
                         try:
-                            ss = s.query(db.TMDBSeason).filter(
-                                db.TMDBSeason.tmdb_series_id == mrow.tmdb_id,
-                                db.TMDBSeason.language == lang,
-                            ).all()
+                            ss = (
+                                s.query(db.TMDBSeason)
+                                .filter(
+                                    db.TMDBSeason.tmdb_series_id == mrow.tmdb_id,
+                                    db.TMDBSeason.language == lang,
+                                )
+                                .all()
+                            )
                             for si in ss:
                                 seasons_data[si.season_number] = {
                                     'season_number': si.season_number,
@@ -763,13 +852,53 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
                                 }
                         except Exception:
                             pass
-
+                    if ep_fields:
+                        need_ep = bool(ep_fields & {'duration', 'plot', 'name', 'poster', 'rating'})
+                        if need_ep:
+                            ep_row = (
+                                s.query(db.TMDBEpisode)
+                                .filter(
+                                    db.TMDBEpisode.tmdb_series_id == mrow.tmdb_id,
+                                    db.TMDBEpisode.language == lang,
+                                    db.TMDBEpisode.season == season,
+                                    db.TMDBEpisode.episode == episode,
+                                )
+                                .first()
+                            )
+                            if ep_row:
+                                if 'duration' in ep_fields and ep_row.duration_mins:
+                                    try:
+                                        ep_secs = int(ep_row.duration_mins) * 60
+                                    except Exception:
+                                        pass
+                                if 'plot' in ep_fields and ep_row.overview:
+                                    ep_plot = ep_row.overview
+                                if 'name' in ep_fields and ep_row.name:
+                                    ep_name = ep_row.name
+                                if 'poster' in ep_fields and ep_row.still_path:
+                                    ep_cover = "https://image.tmdb.org/t/p/w500" + ep_row.still_path
+                                if 'rating' in ep_fields and ep_row.vote_average is not None:
+                                    try:
+                                        ep_rating = float(ep_row.vote_average)
+                                        ep_rating_5based = int(min(5, max(0, round(ep_rating / 2.0))))
+                                    except Exception:
+                                        ep_rating = None
+                                        ep_rating_5based = 0
         except Exception:
             pass
+
+        if ep_cover is None:
+            ep_cover = cover
+        if ep_rating is not None and ep_rating_5based is None:
+            try:
+                ep_rating_5based = int(min(5, max(0, round(ep_rating / 2.0))))
+            except Exception:
+                ep_rating_5based = 0
+
         cat_name = normalize_group_for_type(it.group or "Serie", "series")
         cat_id = get_category_id(cat_name, 3000)
         cat_map[cat_name] = cat_id
-        s = series_map.setdefault(
+        s_series = series_map.setdefault(
             sid,
             {
                 "series_id": sid,
@@ -783,10 +912,15 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
                 "category_name": cat_name,
             },
         )
-        
-        # Season data
+
+        # Aggiorna i metadati della serie nel caso in cui esista già
+        s_series["name"] = name
+        s_series["cover"] = cover
+        s_series["plot"] = plot
+        s_series["rating"] = rating
+
         if season_fields and season in seasons_data:
-            season_data = s['seasons'].setdefault(season, {})
+            season_data = s_series['seasons'].setdefault(season, {})
             tmdb_season = seasons_data[season]
             if 'name' in season_fields and tmdb_season.get('name'):
                 season_data['name'] = tmdb_season['name']
@@ -797,79 +931,7 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
             if 'air_date' in season_fields and tmdb_season.get('air_date'):
                 season_data['air_date'] = tmdb_season['air_date']
 
-        ep_code = f"S{season:02d}E{episode:02d}"
-        ep_id = str(crc32_num(f"{sid}:{season}:{episode}"))
-        # Calcola durata episodio: preferisci TMDB se selezionato
-        ep_secs = _extract_duration(it.attrs)
-        ep_plot = ""
-        ep_name = ep_code
-        ep_cover = cover
-        try:
-            if 'duration' in ep_fields or 'plot' in ep_fields or 'name' in ep_fields or 'poster' in ep_fields:
-                with db.SessionLocal() as s2:
-                    from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                    t2, _ = _norm_title_year(it.title, it.attrs or {})
-                    sig2 = _sig_for('series', t2, None)
-                    mrow2 = s2.get(db.TMDBMap, sig2)
-                    if mrow2:
-                        ep_row = s2.query(db.TMDBEpisode).filter(
-                            db.TMDBEpisode.tmdb_series_id == mrow2.tmdb_id,
-                            db.TMDBEpisode.language == lang,
-                            db.TMDBEpisode.season == season,
-                            db.TMDBEpisode.episode == episode,
-                        ).first()
-                        if ep_row:
-                            if 'duration' in ep_fields and ep_row.duration_mins:
-                                ep_secs = int(ep_row.duration_mins) * 60
-                            if 'plot' in ep_fields and ep_row.overview:
-                                ep_plot = ep_row.overview
-                            if 'name' in ep_fields and ep_row.name:
-                                ep_name = ep_row.name
-                            if 'poster' in ep_fields and ep_row.still_path:
-                                ep_cover = "https://image.tmdb.org/t/p/w500" + ep_row.still_path
-        except Exception:
-            pass
-        ep_code = f"S{season:02d}E{episode:02d}"
-        ep_id = str(crc32_num(f"{sid}:{season}:{episode}"))
-        ep_secs = _extract_duration(it.attrs)
-        ep_plot = ""
-        ep_name = ep_code
-        ep_cover = cover
-        ep_rating = None
-        ep_rating_5based = None
-
-        try:
-            if 'duration' in ep_fields or 'plot' in ep_fields or 'name' in ep_fields or 'poster' in ep_fields or 'rating' in ep_fields:
-                with db.SessionLocal() as s2:
-                    from app.routers.admin_tmdb import _norm_title_year, _sig_for
-                    t2, _ = _norm_title_year(it.title, it.attrs or {})
-                    sig2 = _sig_for('series', t2, None)
-                    mrow2 = s2.get(db.TMDBMap, sig2)
-                    if mrow2:
-                        ep_row = s2.query(db.TMDBEpisode).filter(
-                            db.TMDBEpisode.tmdb_series_id == mrow2.tmdb_id,
-                            db.TMDBEpisode.language == lang,
-                            db.TMDBEpisode.season == season,
-                            db.TMDBEpisode.episode == episode,
-                        ).first()
-                        if ep_row:
-                            if 'duration' in ep_fields and ep_row.duration_mins:
-                                ep_secs = int(ep_row.duration_mins) * 60
-                            if 'plot' in ep_fields and ep_row.overview:
-                                ep_plot = ep_row.overview
-                            if 'name' in ep_fields and ep_row.name:
-                                ep_name = ep_row.name
-                            if 'poster' in ep_fields and ep_row.still_path:
-                                ep_cover = "https://image.tmdb.org/t/p/w500" + ep_row.still_path
-                            if 'rating' in ep_fields and ep_row.vote_average is not None:
-                                ep_rating = float(ep_row.vote_average)
-                                try:
-                                    ep_rating_5based = int(min(5, max(0, round((ep_rating or 0.0) / 2.0))))
-                                except Exception:
-                                    ep_rating_5based = 0
-        except Exception:
-            pass
-        s["episodes_by_season"][str(season)].append(
+        s_series["episodes_by_season"][str(season)].append(
             {
                 "id": ep_id,
                 "title": ep_name,
@@ -891,18 +953,7 @@ def build_series_collections(base_url: str, items: Iterable[M3UItem], xt_config:
         )
 
     ep_re = re.compile(r"E(\d+)$", re.I)
-    
-    def _episode_num(title: str) -> int:
-        m = ep_re.search(title or "")
-        return int(m.group(1)) if m else 0
 
-    for sm in series_map.values():
-        for k, eps in sm.get("episodes_by_season", {}).items():
-            eps.sort(key=lambda e: _episode_num(str(e.get("title", ""))))
-    return series_map, cat_map
-
-    ep_re = re.compile(r"E(\d+)$", re.I)
-    
     def _episode_num(title: str) -> int:
         m = ep_re.search(title or "")
         return int(m.group(1)) if m else 0
@@ -1189,7 +1240,7 @@ def build_vod_info(base_url: str, vod_id: str, all_items: Iterable[M3UItem], xt_
             sig = _sig_for('movie', t, y)
             mrow = s.get(db.TMDBMap, sig)
             if mrow:
-                row = s.get(db.TMDBMovie, {"tmdb_id": mrow.tmdb_id, "language": lang})
+                row = s.get(db.TMDBMovie, (mrow.tmdb_id, lang))
                 if row:
                     if 'name' in mv_fields and (row.title or ''):
                         title = row.title

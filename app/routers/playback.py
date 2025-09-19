@@ -26,12 +26,22 @@ def tv_get(request: Request, u: AnyHttpUrl = Query(...), useProxy: bool = Query(
     return RedirectResponse(url=data["resolvedUrl"], status_code=302)
 
 
+@router.api_route("/tv.m3u8", methods=["GET", "HEAD"])
+def tv_manifest(request: Request, u: AnyHttpUrl = Query(...), useProxy: bool = Query(False)):
+    return tv_get(request, u, useProxy)
+
+
 @router.api_route("/video", methods=["GET", "HEAD"])
 def video_get(request: Request, u: AnyHttpUrl = Query(...), useProxy: bool = Query(False)):
     data = handle_video(request, str(u), None, useProxy)
     if not data.get("ok") or not data.get("resolvedUrl"):
         raise HTTPException(status_code=502, detail="unable_to_resolve")
     return RedirectResponse(url=data["resolvedUrl"], status_code=302)
+
+
+@router.api_route("/video.m3u8", methods=["GET", "HEAD"])
+def video_manifest(request: Request, u: AnyHttpUrl = Query(...), useProxy: bool = Query(False)):
+    return video_get(request, u, useProxy)
 
 
 @router.api_route("/play", methods=["GET", "HEAD"])  # alias per /tv

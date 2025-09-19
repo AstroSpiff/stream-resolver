@@ -5,7 +5,7 @@ import os
 import re
 import uuid
 import urllib.parse
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from fastapi import HTTPException, Request
 
@@ -13,6 +13,7 @@ from app import config
 from app.adapter import ResolverError, run_resolver
 import logging
 from app.logutil import redact_url
+from functools import lru_cache
 
 POLICIES_FILE = os.path.join(config.CONFIG_DIR, "resolver_policies.json")
 
@@ -121,109 +122,152 @@ def _wrap_proxy(url: str, enabled: bool) -> str:
     return url
 
 
+_DEFAULT_DB_FIELDS = ("h_user-agent", "h_referer", "h_origin", "h_cookie", "key_id", "key")
+
+
+def _resolve_db_fields_config(mf: Dict[str, Any]) -> Dict[str, bool]:
+    raw = mf.get("db_fields")
+    fields: Dict[str, bool] = {}
+    if isinstance(raw, dict):
+        fields = {str(k): bool(v) for k, v in raw.items()}
+    if mf.pop("use_db_metadata", False):
+        if not fields:
+            fields = {name: True for name in _DEFAULT_DB_FIELDS}
+        else:
+            for name in _DEFAULT_DB_FIELDS:
+                fields.setdefault(name, True)
+    mf["db_fields"] = fields
+    return fields
+
+
+@lru_cache(maxsize=512)
+def _playlist_metadata(original_url: str) -> Optional[Dict[str, Any]]:
+    try:
+        from app import db as _db
+        from sqlalchemy import select
+
+        with _db.SessionLocal() as session:
+            stmt = (
+                select(_db.PlaylistItem)
+                .where(_db.PlaylistItem.original_url == original_url)
+                .order_by(_db.PlaylistItem.requires_proxy.desc().nullslast(), _db.PlaylistItem.id.desc())
+            )
+            row = session.execute(stmt).scalars().first()
+            if not row:
+                return None
+
+            attrs = row.attrs if isinstance(row.attrs, dict) else {}
+            special_raw = attrs.get('special')
+            special = cast(Dict[str, Any], special_raw) if isinstance(special_raw, dict) else {}
+            raw_headers = special.get('headers')
+            raw_license = special.get('license')
+            special_headers = cast(Dict[str, Any], raw_headers) if isinstance(raw_headers, dict) else {}
+            special_license = cast(Dict[str, Any], raw_license) if isinstance(raw_license, dict) else {}
+
+            return {
+                "headers": {
+                    "h_user-agent": getattr(row, 'headers_user_agent', None),
+                    "h_referer": getattr(row, 'headers_referer', None),
+                    "h_origin": getattr(row, 'headers_origin', None),
+                    "h_cookie": getattr(row, 'headers_cookie', None),
+                },
+                "license_type": str(getattr(row, 'license_type', '') or '').lower(),
+                "clearkey_kid": getattr(row, 'clearkey_kid', None),
+                "clearkey_key": getattr(row, 'clearkey_key', None),
+                "special_headers": {k.lower(): v for k, v in special_headers.items() if v},
+                "special_license": {k.lower(): v for k, v in special_license.items() if v},
+            }
+    except Exception:
+        return None
+
+
+def _merge_mediaflow_metadata(mf: Dict[str, Any], original_url: str, db_fields: Dict[str, bool]) -> None:
+    if not db_fields:
+        return
+
+    meta = _playlist_metadata(original_url)
+    if not meta:
+        return
+
+    headers = mf.setdefault('headers', {})
+    meta_headers = cast(Dict[str, Any], meta.get('headers') or {})
+    specials = cast(Dict[str, Any], meta.get('special_headers') or {})
+
+    def maybe_set_header(field: str, candidates: List[Any]) -> None:
+        if not db_fields.get(field):
+            return
+        if headers.get(field):
+            return
+        for candidate in candidates:
+            if candidate:
+                headers[field] = str(candidate)
+                return
+
+    maybe_set_header('h_user-agent', [meta_headers.get('h_user-agent'), specials.get('user-agent')])
+    maybe_set_header('h_referer', [meta_headers.get('h_referer'), specials.get('referer'), specials.get('referrer')])
+    maybe_set_header('h_origin', [meta_headers.get('h_origin'), specials.get('origin')])
+    maybe_set_header('h_cookie', [meta_headers.get('h_cookie'), specials.get('cookie'), specials.get('cookies')])
+
+    if meta.get('license_type') == 'clearkey':
+        clearkey = mf.setdefault('clearkey', {})
+        special_license = cast(Dict[str, Any], meta.get('special_license') or {})
+        if db_fields.get('key_id') and not clearkey.get('key_id'):
+            kid = meta.get('clearkey_kid') or special_license.get('key_id') or special_license.get('kid')
+            if kid:
+                clearkey['key_id'] = str(kid).strip()
+        if db_fields.get('key') and not clearkey.get('key'):
+            key_val = meta.get('clearkey_key') or special_license.get('key')
+            if key_val:
+                clearkey['key'] = str(key_val).strip()
 def _build_mediaflow_url(original_url: str, mf: Dict[str, Any]) -> str:
     logger = logging.getLogger(__name__)
-    # pick preset if specified, else default
     preset = (mf.get("preset") or "").strip() or None
     mflow, pwd = config.get_mediaflow_preset(preset)
     if not mflow or not pwd:
         raise HTTPException(status_code=400, detail="Config mancante: imposta mediaflow_url e api_password in /admin.")
-    # Optional: per-field enrichment from DB
-    dbf = mf.get("db_fields") or {}
-    legacy = bool(mf.get("use_db_metadata"))
-    wants_any = legacy or any(bool(v) for v in dbf.values())
-    if wants_any:
-        try:
-            # Lookup PlaylistItem by original_url and inject headers/clearkey from attrs.special
-            from app import db as _db
-            from sqlalchemy import select
-            with _db.SessionLocal() as s:
-                cand = (
-                    s.execute(
-                        select(_db.PlaylistItem)
-                        .where(_db.PlaylistItem.original_url == original_url)
-                        .order_by(_db.PlaylistItem.requires_proxy.desc().nullslast(), _db.PlaylistItem.id.desc())
-                    ).scalars().first()
-                )
-                if cand:
-                    hmap = mf.setdefault('headers', {})
-                    if legacy or dbf.get('h_user-agent'):
-                        if getattr(cand, 'headers_user_agent', None):
-                            hmap['h_user-agent'] = str(cand.headers_user_agent)
-                    if legacy or dbf.get('h_referer'):
-                        if getattr(cand, 'headers_referer', None):
-                            hmap['h_referer'] = str(cand.headers_referer)
-                    if legacy or dbf.get('h_origin'):
-                        if getattr(cand, 'headers_origin', None):
-                            hmap['h_origin'] = str(cand.headers_origin)
-                    if legacy or dbf.get('h_cookie'):
-                        if getattr(cand, 'headers_cookie', None):
-                            hmap['h_cookie'] = str(cand.headers_cookie)
-                    if legacy or dbf.get('key_id') or dbf.get('key'):
-                        if str(getattr(cand, 'license_type', '') or '').lower() == 'clearkey':
-                            kid = (getattr(cand, 'clearkey_kid', '') or '').strip()
-                            key = (getattr(cand, 'clearkey_key', '') or '').strip()
-                            if (legacy or dbf.get('key_id')) and kid:
-                                mf.setdefault('clearkey', {})['key_id'] = kid
-                            if (legacy or dbf.get('key')) and key:
-                                mf.setdefault('clearkey', {})['key'] = key
-                    if isinstance(cand.attrs, dict):
-                        sp = (cand.attrs or {}).get('special') or {}
-                        if isinstance(sp, dict):
-                            hdrs_in = (sp.get('headers') or {}) if isinstance(sp.get('headers'), dict) else {}
-                            for hk, hv in hdrs_in.items():
-                                nm = (hk or '').strip().lower()
-                                if not hv:
-                                    continue
-                                if (legacy or dbf.get('h_user-agent')) and nm == 'user-agent':
-                                    hmap.setdefault('h_user-agent', str(hv))
-                                elif (legacy or dbf.get('h_referer')) and nm in ('referer', 'referrer'):
-                                    hmap.setdefault('h_referer', str(hv))
-                                elif (legacy or dbf.get('h_origin')) and nm == 'origin':
-                                    hmap.setdefault('h_origin', str(hv))
-                                elif (legacy or dbf.get('h_cookie')) and nm in ('cookie', 'cookies'):
-                                    hmap.setdefault('h_cookie', str(hv))
-                            lic = sp.get('license') or {}
-                            if (legacy or dbf.get('key_id') or dbf.get('key')) and isinstance(lic, dict) and (str(lic.get('type') or '').lower() == 'clearkey'):
-                                kid2 = str(lic.get('key_id') or lic.get('kid') or '').strip()
-                                key2 = str(lic.get('key') or '').strip()
-                                if (legacy or dbf.get('key_id')) and kid2:
-                                    mf.setdefault('clearkey', {})['key_id'] = kid2
-                                if (legacy or dbf.get('key')) and key2:
-                                    mf.setdefault('clearkey', {})['key'] = key2
-        except Exception:
-            # Non-fatal: fallback to policy-provided values
-            pass
+    db_fields = _resolve_db_fields_config(mf)
     try:
-        # Log sintetico della build MF (redatto)
-        logger.debug(
-            "MF build: endpoint=%s path=%s headers=%s url=%s",
-            (mf.get("endpoint") or ""),
-            (mf.get("path") or ""),
-            {k: ("****" if k in ("h_cookie",) else v) for k, v in (mf.get("headers") or {}).items()},
-            redact_url(original_url),
-        )
+        _merge_mediaflow_metadata(mf, original_url, db_fields)
     except Exception:
-        pass
-    endpoint = (mf.get("endpoint") or "extractor_video").lower()
+        logger.exception("MF metadata merge failed for %s", redact_url(original_url))
+
+    headers_log = {}
+    for k, v in (mf.get("headers") or {}).items():
+        headers_log[k] = "****" if k == "h_cookie" else v
+    clearkey_log = {}
+    for k, v in (mf.get("clearkey") or {}).items():
+        clearkey_log[k] = "****" if k == "key" else v
+    logger.debug(
+        "MF build: endpoint=%s path=%s headers=%s clearkey=%s url=%s",
+        (mf.get("endpoint") or ""),
+        (mf.get("path") or ""),
+        headers_log,
+        clearkey_log,
+        redact_url(original_url),
+    )
+
+    def append_common(params: List[Tuple[str, str]]) -> None:
+        headers = mf.get("headers") or {}
+        for hkey in ("h_referer", "h_origin", "h_user-agent", "h_cookie"):
+            hv = str(headers.get(hkey) or "").strip()
+            if hv:
+                params.append((hkey, hv))
+        ck = mf.get("clearkey") or {}
+        kid = str(ck.get("key_id") or ck.get("kid") or "").strip()
+        key = str(ck.get("key") or "").strip()
+        if kid:
+            params.append(("key_id", kid))
+        if key:
+            params.append(("key", key))
+
+    endpoint = (mf.get("endpoint") or "extractor_video").strip().lower()
     if endpoint == "proxy":
         path = (mf.get("path") or "").strip().strip("/") or "hls/manifest.m3u8"
         base = f"{mflow}/proxy/{path}"
         params: List[Tuple[str, str]] = [("d", original_url), ("api_password", pwd)]
-        headers = (mf.get("headers") or {})
-        for hkey in ("h_referer", "h_origin", "h_user-agent", "h_cookie"):
-            hv = (headers.get(hkey) or "").strip()
-            if hv:
-                params.append((hkey, hv))
+        append_common(params)
         if mf.get("force_playlist_proxy"):
             params.append(("force_playlist_proxy", "true"))
-        ck = mf.get("clearkey") or {}
-        # Ensure values are strings for typing safety
-        kid = str(ck.get("key_id") or "").strip()
-        key = str(ck.get("key") or "").strip()
-        if kid and key:
-            params.append(("key_id", kid))
-            params.append(("key", key))
         qs = "&".join(f"{k}={config.url_encode(v)}" for k, v in params)
         return f"{base}?{qs}"
     # default: extractor/video
@@ -235,6 +279,7 @@ def _build_mediaflow_url(original_url: str, mf: Dict[str, Any]) -> str:
         ("api_password", pwd),
         ("d", original_url),
     ]
+    append_common(q)
     qs = "&".join(f"{k}={config.url_encode(v)}" for k, v in q if v != "")
     return f"{mflow}/extractor/video?{qs}"
 

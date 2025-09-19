@@ -4,12 +4,12 @@ from __future__ import annotations
 import os
 import urllib.parse
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from fastapi import APIRouter, HTTPException, Request
 import logging
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from app import config
 from app.services.xtream import (
@@ -29,6 +29,8 @@ from app.services.xtream import (
     require_xt_creds,
     xmltv_from_cache,
     build_vod_info,
+    is_tv_endpoint,
+    is_video_endpoint,
 )
 from app.services import policies as pol
 from app.logutil import redact_url
@@ -36,6 +38,80 @@ import httpx
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_MF_PRECHECK_ENABLED = os.environ.get("MF_PRECHECK_HEAD", "").lower() in ("1", "true", "yes")
+
+
+async def _fetch_mediaflow_manifest(target: str) -> Optional[PlainTextResponse]:
+    """Scarica il manifest HLS dal proxy Mediaflow e lo serve inline."""
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as cli:
+            resp = await cli.get(target)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning("xtream: fetch manifest failed for %s: %s", redact_url(target), e)
+        return None
+
+    text = resp.text or ""
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            parsed = urlparse(stripped)
+            if not parsed.scheme:
+                line = urllib.parse.urljoin(target, stripped)
+        lines.append(line)
+    body = "\n".join(lines)
+    if text.endswith("\n"):
+        body += "\n"
+    return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
+
+
+async def _maybe_precheck_target(url: str, log_prefix: str) -> None:
+    if not _MF_PRECHECK_ENABLED:
+        return
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=5.0) as cli:
+            resp = await cli.head(url)
+        logger.info("%s: precheck HEAD %s -> %s", log_prefix, redact_url(url), resp.status_code)
+    except Exception as e:
+        logger.warning("%s: precheck error for %s: %s", log_prefix, redact_url(url), e)
+
+
+async def _apply_policy_and_respond(
+    request: Request,
+    wrapper_url: str,
+    policy_kind: str,
+    log_prefix: str,
+) -> Optional[Union[PlainTextResponse, RedirectResponse]]:
+    try:
+        pu = urlparse(wrapper_url)
+        if not (is_tv_endpoint(pu.path) or is_video_endpoint(pu.path)):
+            return None
+        qs = parse_qs(pu.query)
+        original = (qs.get('u') or [''])[0]
+        if not original:
+            return None
+        out = pol.apply_policy(request, original, policy_kind)
+        if not out or not out.get('ok') or not out.get('resolvedUrl'):
+            return None
+        target = out['resolvedUrl']
+        logger.info("%s: policy resolved -> %s", log_prefix, redact_url(target))
+        await _maybe_precheck_target(target, log_prefix)
+        if 'm3u8' in (target or '').lower():
+            manifest = await _fetch_mediaflow_manifest(target)
+            if manifest is not None:
+                logger.info("%s: serving proxied MF manifest -> %s", log_prefix, redact_url(target))
+                return manifest
+            logger.info("%s: MF manifest fetch failed, fallback redirect %s", log_prefix, redact_url(target))
+        else:
+            logger.info("%s: redirecting directly to target %s", log_prefix, redact_url(target))
+        return RedirectResponse(url=target, status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("%s: error applying policy", log_prefix)
+        return None
 
 
 @router.api_route("/xtream/{xt_id}", methods=["GET", "HEAD"])
@@ -124,7 +200,7 @@ async def xt_player_api(
             base = str(request.base_url).rstrip("/")
         now = now_ts()
         try:
-            pu = urllib.parse.urlparse(base)
+            pu = urlparse(base)
             proto = pu.scheme or "http"
             host = pu.hostname or "localhost"
             port_num = pu.port or (443 if proto == "https" else 80)
@@ -754,7 +830,7 @@ async def xt_panel_api(
     base = str(request.base_url).rstrip("/")
     now = now_ts()
     try:
-        pu = urllib.parse.urlparse(base)
+        pu = urlparse(base)
         proto = pu.scheme or "http"
         host = pu.hostname or "localhost"
         port_num = pu.port or (443 if proto == "https" else 80)
@@ -933,35 +1009,22 @@ async def xt_live_redirect(request: Request, xt_id: str, u: str, p: str, stream_
             if url:
                 # Se è un link interno /tv?u=..., prova ad applicare subito la policy (mediaflow) per massima compatibilità client
                 try:
-                    from urllib.parse import urlparse, parse_qs
-                    pu = urlparse(url)
-                    if pu.path.rstrip('/') == '/tv':
-                        qs = parse_qs(pu.query)
-                        orig = (qs.get('u') or [''])[0]
-                        logger.info("xtream/live: stream_id=%s ext=%s direct_source=/tv u=%s", stream_id, ext, redact_url(orig))
-                        if orig:
-                            out = pol.apply_policy(request, orig, 'tv')
-                            if out and out.get('ok') and out.get('resolvedUrl'):
-                                target = out['resolvedUrl']
-                                logger.info("xtream/live: policy resolved -> %s", redact_url(target))
-                                # Optional precheck to log proxy reachability
-                                if os.environ.get("MF_PRECHECK_HEAD", "").lower() in ("1","true","yes"):
-                                    try:
-                                        async with httpx.AsyncClient(follow_redirects=True, timeout=5.0) as cli:
-                                            r = await cli.head(target)
-                                            logger.info("xtream/live: precheck HEAD %s -> %s", redact_url(target), r.status_code)
-                                    except Exception as e:
-                                        logger.warning("xtream/live: precheck error for %s: %s", redact_url(target), e)
-                                # For TiviMate and similar, a first URL ending with .m3u8 helps extractor selection
-                                # Se il target è un manifest HLS, restituisci un piccolo master .m3u8
-                                # così il client sceglie HLS senza ulteriori redirect.
-                                if 'm3u8' in (target or '').lower():
-                                    body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
-                                    logger.info("xtream/live: serving inline M3U8 stub -> %s", redact_url(target))
-                                    return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
-                                # Altrimenti, redirect diretto al target risolto
-                                logger.info("xtream/live: redirecting directly to target %s", redact_url(target))
-                                return RedirectResponse(url=target, status_code=302)
+                    logger.info(
+                        "xtream/live: stream_id=%s ext=%s direct_source=%s",
+                        stream_id,
+                        ext,
+                        redact_url(url),
+                    )
+                    handled = await _apply_policy_and_respond(
+                        request,
+                        url,
+                        'tv',
+                        f"xtream/live stream_id={stream_id}",
+                    )
+                    if handled is not None:
+                        return handled
+                except HTTPException:
+                    raise
                 except Exception:
                     logger.exception("xtream/live: error applying policy for stream_id=%s", stream_id)
                 # Fallback: redirect to the original direct source URL
@@ -991,24 +1054,18 @@ async def xt_movie_redirect(request: Request, xt_id: str, u: str, p: str, stream
             if url:
                 # Apply policy if it's an internal /tv link
                 try:
-                    from urllib.parse import urlparse, parse_qs, quote as _quote
-                    pu = urlparse(url)
-                    if pu.path.rstrip('/') == '/tv':
-                        qs = parse_qs(pu.query)
-                        orig = (qs.get('u') or [''])[0]
-                        out = pol.apply_policy(request, orig, 'tv')
-                        if out and out.get('ok') and out.get('resolvedUrl'):
-                            target = out['resolvedUrl']
-                            ua = (request.headers.get('user-agent') or '').lower()
-                            # Se è HLS, serviamo uno stub M3U8 (no proxy)
-                            if 'm3u8' in (target or '').lower():
-                                body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
-                                logger.info("xtream/movie: serving inline M3U8 stub -> %s", redact_url(target))
-                                return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
-                            logger.info("xtream/movie: redirecting directly to target %s", redact_url(target))
-                            return RedirectResponse(url=target, status_code=302)
+                    handled = await _apply_policy_and_respond(
+                        request,
+                        url,
+                        'tv',
+                        f"xtream/movie stream_id={stream_id}",
+                    )
+                    if handled is not None:
+                        return handled
+                except HTTPException:
+                    raise
                 except Exception:
-                    pass
+                    logger.exception("xtream/movie: error applying policy for stream_id=%s", stream_id)
                 # Fallback: redirect to direct source (absolute)
                 try:
                     if url.startswith('/'):
@@ -1040,23 +1097,23 @@ async def xt_series_redirect(
             if url:
                 # Apply policy if it's an internal /tv link
                 try:
-                    from urllib.parse import urlparse, parse_qs, quote as _quote
-                    pu = urlparse(url)
-                    if pu.path.rstrip('/') == '/tv':
-                        qs = parse_qs(pu.query)
-                        orig = (qs.get('u') or [''])[0]
-                        out = pol.apply_policy(request, orig, 'tv')
-                        if out and out.get('ok') and out.get('resolvedUrl'):
-                            target = out['resolvedUrl']
-                            ua = (request.headers.get('user-agent') or '').lower()
-                            if 'm3u8' in (target or '').lower():
-                                body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
-                                logger.info("xtream/series: serving inline M3U8 stub -> %s", redact_url(target))
-                                return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
-                            logger.info("xtream/series: redirecting directly to target %s", redact_url(target))
-                            return RedirectResponse(url=target, status_code=302)
+                    handled = await _apply_policy_and_respond(
+                        request,
+                        url,
+                        'tv',
+                        f"xtream/series series_id={series_id} season={season} episode={episode}",
+                    )
+                    if handled is not None:
+                        return handled
+                except HTTPException:
+                    raise
                 except Exception:
-                    pass
+                    logger.exception(
+                        "xtream/series: error applying policy series_id=%s season=%s episode=%s",
+                        series_id,
+                        season,
+                        episode,
+                    )
                 # Fallback: absolute direct source
                 try:
                     if url.startswith('/'):
@@ -1084,23 +1141,18 @@ async def xt_series_by_epid_redirect(request: Request, xt_id: str, u: str, p: st
                     url = ep.get("direct_source")
                     if url:
                         try:
-                            from urllib.parse import urlparse, parse_qs, quote as _quote
-                            pu = urlparse(url)
-                            if pu.path.rstrip('/') == '/tv':
-                                qs = parse_qs(pu.query)
-                                orig = (qs.get('u') or [''])[0]
-                                out = pol.apply_policy(request, orig, 'tv')
-                                if out and out.get('ok') and out.get('resolvedUrl'):
-                                    target = out['resolvedUrl']
-                                    ua = (request.headers.get('user-agent') or '').lower()
-                                    if 'm3u8' in (target or '').lower():
-                                        body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=1500000\n" + target + "\n"
-                                        logger.info("xtream/series-epid: serving inline M3U8 stub -> %s", redact_url(target))
-                                        return PlainTextResponse(body, media_type="application/vnd.apple.mpegurl")
-                                    logger.info("xtream/series-epid: redirecting directly to target %s", redact_url(target))
-                                    return RedirectResponse(url=target, status_code=302)
+                            handled = await _apply_policy_and_respond(
+                                request,
+                                url,
+                                'tv',
+                                f"xtream/series-epid episode_id={episode_id}",
+                            )
+                            if handled is not None:
+                                return handled
+                        except HTTPException:
+                            raise
                         except Exception:
-                            pass
+                            logger.exception("xtream/series-epid: error applying policy for episode_id=%s", episode_id)
                         # Fallback: absolute direct source
                         try:
                             if url.startswith('/'):
